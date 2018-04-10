@@ -38,7 +38,7 @@
 #include "erl_db.h"
 #include "erl_binary.h"
 #include "erl_bits.h"
-#include "erl_instrument.h"
+#include "erl_mtrace.h"
 #include "erl_mseg.h"
 #include "erl_monitors.h"
 #include "erl_hl_timer.h"
@@ -210,8 +210,6 @@ typedef struct {
     int top_pad;
     AlcUInit_t alloc_util;
     struct {
-	int stat;
-	int map;
 	char *mtrace;
 	char *nodename;
     } instr;
@@ -442,6 +440,7 @@ set_default_binary_alloc_opts(struct au_init *ip)
 #endif
     ip->init.util.ts 		= ERTS_ALC_MTA_BINARY;
     ip->init.util.acul		= ERTS_ALC_DEFAULT_ACUL;
+    ip->init.util.atags		= 1;
 }
 
 static void
@@ -478,6 +477,7 @@ set_default_driver_alloc_opts(struct au_init *ip)
 #endif
     ip->init.util.ts 		= ERTS_ALC_MTA_DRIVER;
     ip->init.util.acul		= ERTS_ALC_DEFAULT_ACUL;
+    ip->init.util.atags		= 1;
 }
 
 static void
@@ -515,6 +515,7 @@ set_default_test_alloc_opts(struct au_init *ip)
     ip->init.util.mmbcs 	= 0; /* Main carrier size */
     ip->init.util.ts 		= ERTS_ALC_MTA_TEST;
     ip->init.util.acul		= ERTS_ALC_DEFAULT_ACUL;
+    ip->init.util.atags		= 1;
 
     /* Use a constant minimal MBC size */
 #if ERTS_SA_MB_CARRIERS
@@ -953,7 +954,6 @@ erts_alloc_init(int *argc, char **argv, ErtsAllocInitOpts *eaiop)
 		       &test_alloc_state);
 
     erts_mtrace_install_wrapper_functions();
-    extra_block_size += erts_instr_init(init.instr.stat, init.instr.map);
 
     init_aireq_alloc();
 
@@ -1473,7 +1473,9 @@ handle_au_arg(struct au_init *auip,
 	    }
 	    if (!strategy_support_carrier_migration(auip))
 		auip->init.util.acul = 0;
-	}
+	} else if (has_prefix("atags", sub_param)) {
+            auip->init.util.atags = get_bool_value(sub_param + 5, argv, ip);
+        }
 	else
 	    goto bad_switch;
 	break;
@@ -1806,24 +1808,6 @@ handle_args(int *argc, char **argv, erts_alc_hndl_args_init_t *init)
 		    break;
 		case 'i':
 		    switch (argv[i][3]) {
-		    case 's':
-			arg = get_value(argv[i]+4, argv, &i);
-			if (strcmp("true", arg) == 0)
-			    init->instr.stat = 1;
-			else if (strcmp("false", arg) == 0)
-			    init->instr.stat = 0;
-			else
-			    bad_value(param, param+3, arg);
-			break;
-		    case 'm':
-			arg = get_value(argv[i]+4, argv, &i);
-			if (strcmp("true", arg) == 0)
-			    init->instr.map = 1;
-			else if (strcmp("false", arg) == 0)
-			    init->instr.map = 0;
-			else
-			    bad_value(param, param+3, arg);
-			break;
 		    case 't':
 			init->instr.mtrace = get_value(argv[i]+4, argv, &i);
 			break;
@@ -1882,9 +1866,7 @@ handle_args(int *argc, char **argv, erts_alc_hndl_args_init_t *init)
 	    case '-':
 		if (argv[i][2] == '\0') {
 		    /* End of system flags reached */
-		    if (init->instr.mtrace
-			/* || init->instr.stat
-			   || init->instr.map */) {
+		    if (init->instr.mtrace) {
 			while (i < *argc) {
 			    if(strcmp(argv[i], "-sname") == 0
 			       || strcmp(argv[i], "-name") == 0) {
@@ -2172,7 +2154,7 @@ erts_memory(fmtfn_t *print_to_p, void *print_to_arg, void *proc, Eterm earg)
  * NOTE! When updating this function, make sure to also update
  *       erlang:memory/[0,1] in $ERL_TOP/erts/preloaded/src/erlang.erl
  */
-#define ERTS_MEM_NEED_ALL_ALCU (!erts_instr_stat && want_tot_or_sys)
+#define ERTS_MEM_NEED_ALL_ALCU (want_tot_or_sys)
     struct {
 	int total;
 	int processes;
@@ -2183,7 +2165,6 @@ erts_memory(fmtfn_t *print_to_p, void *print_to_arg, void *proc, Eterm earg)
 	int binary;
 	int code;
 	int ets;
-	int maximum;
     } want = {0};
     struct {
 	UWord total;
@@ -2195,7 +2176,6 @@ erts_memory(fmtfn_t *print_to_p, void *print_to_arg, void *proc, Eterm earg)
 	UWord binary;
 	UWord code;
 	UWord ets;
-	UWord maximum;
     } size = {0};
     Eterm atoms[sizeof(size)/sizeof(UWord)];
     UWord *uintps[sizeof(size)/sizeof(UWord)];
@@ -2248,12 +2228,6 @@ erts_memory(fmtfn_t *print_to_p, void *print_to_arg, void *proc, Eterm earg)
 	want.ets = 1;
 	atoms[length] = am_ets;
 	uintps[length++] = &size.ets;
-
-	want.maximum = erts_instr_stat;
-	if (want.maximum) {
-	    atoms[length] = am_maximum;
-	    uintps[length++] = &size.maximum;
-	}
     }
     else {
 	DeclareTmpHeapNoproc(tmp_heap,2);
@@ -2333,18 +2307,6 @@ erts_memory(fmtfn_t *print_to_p, void *print_to_arg, void *proc, Eterm earg)
 		    want.ets = 1;
 		    atoms[length] = am_ets;
 		    uintps[length++] = &size.ets;
-		}
-		break;
-	    case am_maximum:
-		if (erts_instr_stat) {
-		    if (!want.maximum) {
-			want.maximum = 1;
-			atoms[length] = am_maximum;
-			uintps[length++] = &size.maximum;
-		    }
-		} else {
-		    UnUseTmpHeapNoproc(2);
-		    return am_badarg;
 		}
 		break;
 	    default:
@@ -2514,14 +2476,7 @@ erts_memory(fmtfn_t *print_to_p, void *print_to_arg, void *proc, Eterm earg)
 	size.ets += erts_get_ets_misc_mem_size();
     }
 
-    if (erts_instr_stat && (want_tot_or_sys || want.maximum)) {
-	if (want_tot_or_sys) {
-	    size.total = erts_instr_get_total();
-	    size.system = size.total - size.processes;
-	}
-	size.maximum = erts_instr_get_max_total();
-    }
-    else if (want_tot_or_sys) {
+    if (want_tot_or_sys) {
 	size.system = size.total - size.processes;
     }
 
@@ -2598,18 +2553,6 @@ erts_allocated_areas(fmtfn_t *print_to_p, void *print_to_arg, void *proc)
     }
 
     i = 0;
-
-    if (erts_instr_stat) {
-	values[i].arity = 2;
-	values[i].name = "total";
-	values[i].ui[0] = erts_instr_get_total();
-	i++;
-
-	values[i].arity = 2;
-	values[i].name = "maximum";
-	values[i].ui[0] = erts_instr_get_max_total();
-	i++;
-    }
 
     values[i].arity = 2;
     values[i].name = "sys_misc";
@@ -2914,10 +2857,7 @@ erts_allocator_info(fmtfn_t to, void *arg)
     erts_alcu_au_info_options(&to, arg, NULL, NULL);
 
     erts_print(to, arg, "=allocator:instr\n");
-    erts_print(to, arg, "option m: %s\n",
-	       erts_instr_memory_map ? "true" : "false");
-    erts_print(to, arg, "option s: %s\n",
-	       erts_instr_stat ? "true" : "false");
+
     erts_print(to, arg, "option t: %s\n",
 	       erts_mtrace_enabled ? "true" : "false");
 
@@ -3023,16 +2963,12 @@ erts_allocator_options(void *proc)
                                              NULL, hpp, szp);
 #endif
     {
-	Eterm o[3], v[3];
-	o[0] = am_atom_put("m", 1);
-	v[0] = erts_instr_memory_map ? am_true : am_false;
-	o[1] = am_atom_put("s", 1);
-	v[1] = erts_instr_stat ? am_true : am_false;
-	o[2] = am_atom_put("t", 1);
-	v[2] = erts_mtrace_enabled ? am_true : am_false;
+	Eterm o[1], v[1];
+	o[0] = am_atom_put("t", 1);
+	v[0] = erts_mtrace_enabled ? am_true : am_false;
 
 	atoms[length] = am_atom_put("instr", 5); 
-	terms[length++] = erts_bld_2tup_list(hpp, szp, 3, o, v);
+	terms[length++] = erts_bld_2tup_list(hpp, szp, 1, o, v);
     }
 
     atoms[length] = am_atom_put("lock_physical_memory", 20);
@@ -3567,8 +3503,8 @@ badarg:
 
 /* 
  * The allocator wrapper prelocking stuff below is about the locking order.
- * It only affects wrappers (erl_mtrace.c and erl_instrument.c) that keep locks
- * during alloc/realloc/free.
+ * It only affects wrappers (erl_mtrace.c) that keep locks during
+ * alloc/realloc/free.
  *
  * Some query functions in erl_alloc_util.c lock the allocator mutex and then
  * use erts_printf that in turn may call the sys allocator through the wrappers.

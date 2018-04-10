@@ -623,6 +623,7 @@ typedef struct {
     } delayed_wakeup;
 #endif
     struct {
+        ErtsAlcuBlockscanYieldData alcu_blockscan;
         ErtsEtsAllYieldData ets_all;
         /* Other yielding operations... */
     } yield;
@@ -672,6 +673,7 @@ struct ErtsSchedulerData_ {
     Uint no;			/* Scheduler number for normal schedulers */
 #ifdef ERTS_DIRTY_SCHEDULERS
     Uint dirty_no;  /* Scheduler number for dirty schedulers */
+    struct enif_environment_t *current_nif;
     Process *dirty_shadow_process;
 #endif
     Port *current_port;

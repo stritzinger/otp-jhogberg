@@ -685,3 +685,6 @@ bif erts_internal:maps_to_list/2
 #
 
 bif erlang:iolist_to_iovec/1
+
+bif erts_internal:gather_alloc_histograms/1
+bif erts_internal:gather_carrier_info/1

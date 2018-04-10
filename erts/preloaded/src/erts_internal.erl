@@ -64,6 +64,9 @@
 %% Auto import name clash
 -export([check_process_code/1]).
 
+
+-export([gather_alloc_histograms/1, gather_carrier_info/1]).
+
 %%
 %% Await result of send to port
 %%
@@ -461,3 +464,25 @@ trace(_PidSpec, _How, _FlagList) ->
       FlagList :: [ ].
 trace_pattern(_MFA, _MatchSpec, _FlagList) ->
     erlang:nif_error(undefined).
+
+-spec gather_alloc_histograms({Type, SchedId, HistWidth, HistStart, Ref}) -> MsgCount when
+    Type :: atom(),
+    SchedId :: non_neg_integer(),
+    HistWidth :: non_neg_integer(),
+    HistStart :: non_neg_integer(),
+    Ref :: reference(),
+    MsgCount :: non_neg_integer().
+
+gather_alloc_histograms(_) ->
+    erlang:nif_error(undef).
+
+-spec gather_carrier_info({Type, SchedId, HistWidth, HistStart, Ref}) -> MsgCount when
+    Type :: atom(),
+    SchedId :: non_neg_integer(),
+    HistWidth :: non_neg_integer(),
+    HistStart :: non_neg_integer(),
+    Ref :: reference(),
+    MsgCount :: non_neg_integer().
+
+gather_carrier_info(_) ->
+    erlang:nif_error(undef).

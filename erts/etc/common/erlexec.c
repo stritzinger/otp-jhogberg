@@ -84,6 +84,7 @@ static const char plusM_au_allocs[]= {
 static char *plusM_au_alloc_switches[] = {
     "as",
     "asbcst",
+    "atags",
     "acul",
     "acnl",
     "acfml",
