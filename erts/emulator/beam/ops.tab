@@ -402,8 +402,8 @@ label L | wait_timeout Fail Src | smp_already_locked(L) => \
     label L | wait_timeout_locked Src Fail
 wait_timeout Fail Src => wait_timeout_unlocked Src Fail
 
-wait_timeout_unlocked Src=aiq Fail => gen_literal_timeout(Fail, Src)
-wait_timeout_locked Src=aiq Fail => gen_literal_timeout_locked(Fail, Src)
+wait_timeout_unlocked Src=aiq Fail=f => gen_literal_timeout(Fail, Src)
+wait_timeout_locked Src=aiq Fail=f => gen_literal_timeout_locked(Fail, Src)
 
 label L | wait Fail | smp_already_locked(L) => label L | wait_locked Fail
 wait Fail => wait_unlocked Fail
@@ -1082,10 +1082,10 @@ bs_start_match2 Fail=f ica X Y D => jump Fail
 bs_start_match2 Fail Bin X Y D => i_bs_start_match2 Bin Fail X Y D
 i_bs_start_match2 xy f t t x
 
-bs_save2 Reg Index => gen_bs_save(Reg, Index)
+bs_save2 Reg=x Index=cu => gen_bs_save(Reg, Index)
 i_bs_save2 x t
 
-bs_restore2 Reg Index => gen_bs_restore(Reg, Index)
+bs_restore2 Reg=x Index=cu => gen_bs_restore(Reg, Index)
 i_bs_restore2 x t
 
 # Matching integers
@@ -1394,7 +1394,7 @@ sorted_put_map_exact F Src=s Dst Live Size Rest=* => \
 sorted_put_map_exact F Src Dst Live Size Rest=* => \
 	      move Src x | update_map_exact F x Dst Live Size Rest
 
-new_map Dst Live Size Rest=* | is_small_map_literal_keys(Size, Rest) => \
+new_map Dst=d Live=iu Size=iu Rest=* | is_small_map_literal_keys(Size, Rest) => \
    gen_new_small_map_lit(Dst, Live, Size, Rest)
 
 new_map d t I
@@ -1409,14 +1409,14 @@ is_map f? xy
 
 ## Transform has_map_fields #{ K1 := _, K2 := _ } to has_map_elements
 
-has_map_fields Fail Src Size Rest=* => \
+has_map_fields Fail=f Src=xy Size=iu Rest=* => \
    gen_has_map_fields(Fail, Src, Size, Rest)
 
 ## Transform get_map_elements(s) #{ K1 := V1, K2 := V2 }
 
-get_map_elements Fail Src Size=u==2 Rest=* => \
+get_map_elements Fail=f Src=xy Size=u==2 Rest=* => \
     gen_get_map_element(Fail, Src, Size, Rest)
-get_map_elements Fail Src Size Rest=* | map_key_sort(Size, Rest) => \
+get_map_elements Fail=f Src=s Size=u Rest=* | map_key_sort(Size, Rest) => \
    gen_get_map_elements(Fail, Src, Size, Rest)
 
 i_get_map_elements f? s I
@@ -1453,12 +1453,12 @@ gc_bif2 Fail Live u$bif:erlang:sminus/2 S1 S2 Dst => \
 # the i_increment/4 instruction (in bodies, not in guards).
 #
 
-gen_plus p Live Int=i Reg=d Dst => \
+gen_plus p Live=iu Int=i Reg=d Dst=d => \
 	gen_increment(Reg, Int, Live, Dst)
-gen_plus p Live Reg=d Int=i Dst => \
+gen_plus p Live=iu Reg=d Int=i Dst=d => \
 	gen_increment(Reg, Int, Live, Dst)
 
-gen_minus p Live Reg=d Int=i Dst | negation_is_small(Int) => \
+gen_minus p Live=iu Reg=d Int=i Dst=d | negation_is_small(Int) => \
 	gen_increment_from_minus(Reg, Int, Live, Dst)
 
 #
@@ -1538,14 +1538,14 @@ bif1 Fail u$bif:erlang:trunc/1 s d => too_old_compiler
 #
 # Guard BIFs.
 #
-gc_bif1 Fail I Bif Src Dst => \
-	gen_guard_bif1(Fail, I, Bif, Src, Dst)
+gc_bif1 Fail=j Live=iu Bif=u Src=s Dst=d => \
+	gen_guard_bif1(Fail, Live, Bif, Src, Dst)
 
-gc_bif2 Fail I Bif S1 S2 Dst => \
-	gen_guard_bif2(Fail, I, Bif, S1, S2, Dst)
+gc_bif2 Fail=j Live=iu Bif=u S1=s S2=s Dst=d => \
+	gen_guard_bif2(Fail, Live, Bif, S1, S2, Dst)
 
-gc_bif3 Fail I Bif S1 S2 S3 Dst => \
-	gen_guard_bif3(Fail, I, Bif, S1, S2, S3, Dst)
+gc_bif3 Fail=j Live=iu Bif=u S1=s S2=s S3=s Dst=d => \
+	gen_guard_bif3(Fail, Live, Bif, S1, S2, S3, Dst)
 
 i_gc_bif1 j? W s t? d
 
