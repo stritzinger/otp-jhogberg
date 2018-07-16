@@ -352,7 +352,12 @@ expr(#c_letrec{body=#c_var{}}=Letrec, effect, _Sub) ->
     void();
 expr(#c_letrec{defs=Fs0,body=B0}=Letrec, Ctxt, Sub) ->
     Fs1 = map(fun ({Name,Fb}) ->
-		      {Name,expr(Fb, {letrec,Ctxt}, Sub)}
+                      case {Ctxt, is_fun_effect_safe(Name, B0)} of
+                          {effect, true} ->
+                              {Name,expr(Fb, {letrec, Ctxt}, Sub)};
+                          _ ->
+                              {Name,expr(Fb, {letrec, value}, Sub)}
+                      end
 	      end, Fs0),
     B1 = body(B0, Ctxt, Sub),
     Letrec#c_letrec{defs=Fs1,body=B1};
@@ -482,6 +487,77 @@ expr(#c_try{anno=A,arg=E0,vars=Vs0,body=B0,evars=Evs0,handler=H0}=Try, _, Sub0) 
 	    H1 = body(H0, value, Sub2),
 	    Try#c_try{arg=E1,vars=Vs1,body=B1,evars=Evs1,handler=H1}
     end.
+
+
+%% If a fun or its application is used as an argument, then it's unsafe to
+%% handle it in effect context as the side-effects may rely on its return
+%% value. The following is a minimal example of where it can go wrong:
+%%
+%% do letrec 'f'/0 = fun () -> ... whatever ...
+%%      in call 'side':'effect'(apply 'f'/0())
+%%   'ok'
+%%
+%% This function returns whether Body relies on a value produced by FVar,
+%% ignoring the uses that are safe under effect.
+is_fun_effect_safe(#c_var{}=FVar, Body) ->
+    ifes_1(FVar, Body, true).
+
+ifes_1(FVar, #c_alias{pat=Pat}, _Safe) ->
+    ifes_1(FVar, Pat, false);
+ifes_1(FVar, #c_apply{op=Op,args=Args}, Safe) ->
+    %% FVar(...) is safe as long its return value is ignored, but it's never
+    %% okay to pass FVar as an argument.
+    ifes_1(FVar, Args, false) andalso ifes_1(FVar, Op, Safe);
+ifes_1(FVar, #c_binary{segments=Segments}, _Safe) ->
+    ifes_1(FVar, Segments, false);
+ifes_1(FVar, #c_bitstr{val=Val,size=Size,unit=Unit}, _Safe) ->
+    ifes_1(FVar, [Val, Size, Unit], false);
+ifes_1(FVar, #c_call{args=Args}, _Safe) ->
+    ifes_1(FVar, Args, false);
+ifes_1(FVar, #c_case{arg=Arg,clauses=Clauses}, Safe) ->
+    ifes_1(FVar, Arg, false) andalso ifes_1(FVar, Clauses, Safe);
+ifes_1(FVar, #c_catch{body=Body}, _Safe) ->
+    ifes_1(FVar, Body, false);
+ifes_1(FVar, #c_clause{pats=Pats,guard=Guard,body=Body}, Safe) ->
+    ifes_1(FVar, [Pats, Guard], false) andalso ifes_1(FVar, Body, Safe);
+ifes_1(FVar, #c_cons{hd=Hd,tl=Tl}, _Safe) ->
+    ifes_1(FVar, [Hd, Tl], false);
+ifes_1(FVar, #c_fun{body=Body}, _Safe) ->
+    ifes_1(FVar, Body, false);
+ifes_1(FVar, #c_let{arg=Arg,body=Body}, Safe) ->
+    ifes_1(FVar, Arg, false) andalso ifes_1(FVar, Body, Safe);
+ifes_1(FVar, #c_letrec{defs=Defs,body=Body}, Safe) ->
+    Funs = [Fun || {_,Fun} <- Defs],
+    ifes_1(FVar, Funs, false) andalso ifes_1(FVar, Body, Safe);
+ifes_1(_FVar, #c_literal{}, _Safe) ->
+    true;
+ifes_1(FVar, #c_map{arg=Arg,es=Elements}, _Safe) ->
+    ifes_1(FVar, [Arg, Elements], false);
+ifes_1(FVar, #c_map_pair{key=Key,val=Val}, _Safe) ->
+    ifes_1(FVar, [Key, Val], false);
+ifes_1(FVar, #c_primop{args=Args}, _Safe) ->
+    ifes_1(FVar, Args, false);
+ifes_1(FVar, #c_receive{timeout=Timeout,action=Action,clauses=Clauses}, Safe) ->
+    ifes_1(FVar, Timeout, false) andalso ifes_1(FVar, [Action, Clauses], Safe);
+ifes_1(FVar, #c_seq{arg=Arg,body=Body}, Safe) ->
+    %% Arg of a #c_seq{} has no effect so it's okay to use FVar there even if
+    %% Safe=false.
+    ifes_1(FVar, Arg, true) andalso ifes_1(FVar, Body, Safe);
+ifes_1(FVar, #c_try{arg=Arg,handler=Handler,body=Body}, Safe) ->
+    ifes_1(FVar, Arg, false) andalso ifes_1(FVar, [Handler, Body], Safe);
+ifes_1(FVar, #c_tuple{es=Elements}, _Safe) ->
+    ifes_1(FVar, Elements, false);
+ifes_1(FVar, #c_values{es=Elements}, _Safe) ->
+    ifes_1(FVar, Elements, false);
+ifes_1(#c_var{name=Name}, #c_var{name=Name}, Safe) ->
+    %% It's safe to return FVar if it's unused.
+    Safe;
+ifes_1(_FVar, #c_var{}, _Safe) ->
+    true;
+ifes_1(FVar, [Expr | Tree], Safe) ->
+    ifes_1(FVar, Expr, Safe) andalso ifes_1(FVar, Tree, Safe);
+ifes_1(_FVar, [], _Safe) ->
+    true.
 
 expr_list(Es, Ctxt, Sub) ->
     [expr(E, Ctxt, Sub) || E <- Es].
