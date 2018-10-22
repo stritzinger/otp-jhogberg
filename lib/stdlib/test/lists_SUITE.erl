@@ -2597,7 +2597,19 @@ subtract(Config) when is_list(Config) ->
     {'EXIT',_} = (catch sub([a|b], [])),
     {'EXIT',_} = (catch sub([a|b], [a])),
 
+    %% Trapping, both crashing and otherwise.
+    [sub_trapping(N) || N <- lists:seq(0, 14)],
+
     ok.
+
+sub_trapping(N) ->
+    List = lists:duplicate(1, N + (1 bsl N)),
+    {'EXIT',_} = (catch sub_trapping_1(List ++ [1 | crash], [])),
+    {'EXIT',_} = (catch sub_trapping_1(List, List ++ [1 | crash])),
+    List = sub_trapping_1(List, []).
+
+sub_trapping_1([], R) -> R;
+sub_trapping_1(L, R) -> sub_trapping_1(L -- R, [1 | R]).
 
 sub_non_matching(A, B) ->
     A = sub(A, B).
