@@ -725,3 +725,10 @@ bif erts_internal:counters_get/2
 bif erts_internal:counters_add/3
 bif erts_internal:counters_put/3
 bif erts_internal:counters_info/1
+
+#
+# New in 21.3
+#
+
+bif erlang:integer_to_list/2
+bif erlang:integer_to_binary/2
