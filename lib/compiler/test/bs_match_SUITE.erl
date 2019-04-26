@@ -44,7 +44,8 @@
          beam_bsm/1,guard/1,is_ascii/1,non_opt_eq/1,
          expression_before_match/1,erl_689/1,restore_on_call/1,
          restore_after_catch/1,matches_on_parameter/1,big_positions/1,
-         matching_meets_apply/1,bs_start_match2_defs/1]).
+         matching_meets_apply/1,bs_start_match2_defs/1,
+         missing_reposition/1]).
 
 -export([coverage_id/1,coverage_external_ignore/2]).
 
@@ -80,7 +81,8 @@ groups() ->
        beam_bsm,guard,is_ascii,non_opt_eq,
        expression_before_match,erl_689,restore_on_call,
        matches_on_parameter,big_positions,
-       matching_meets_apply,bs_start_match2_defs]}].
+       matching_meets_apply,bs_start_match2_defs,
+       missing_reposition]}].
 
 
 init_per_suite(Config) ->
@@ -1983,5 +1985,26 @@ do_matching_meets_apply(_Bin, {Handler, State}) ->
     %% Another case of the above.
     Handler:abs(State).
 
+missing_reposition(Config) when is_list(Config) ->
+    <<"x">> = missing_reposition_1(<<0, "x">>),
+    ok.
+
+missing_reposition_1(<<0, Bin/binary>>) ->
+    %% Call a function that moves the match context passed to it...
+    case skip_until_zero(Bin) of
+        {skipped, Rest} ->
+            Rest;
+        not_found ->
+            %% The match context did not get repositioned before the
+            %% bs_get_tail instruction here.
+            Bin
+    end.
+
+skip_until_zero(<<0,Rest/binary>>) ->
+    {skipped, Rest};
+skip_until_zero(<<_C,Rest/binary>>) ->
+    skip_until_zero(Rest);
+skip_until_zero(_) ->
+    not_found.
 
 id(I) -> I.
