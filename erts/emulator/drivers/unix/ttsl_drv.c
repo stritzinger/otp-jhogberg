@@ -865,8 +865,10 @@ static void ttysl_from_tty(ErlDrvData ttysl_data, ErlDrvEvent fd)
     }
 
     DEBUGLOG(("ttysl_from_tty: remainder = %d", left));
-    
-    if ((i = read((int)(SWord)fd, (char *) p, left)) >= 0) {
+
+    i = read((int)(SWord)fd, (char *) p, left);
+
+    if (i > 0) {
 	if (p != b) {
 	    i += (p - b);
 	}
@@ -894,6 +896,9 @@ static void ttysl_from_tty(ErlDrvData ttysl_data, ErlDrvEvent fd)
 		tpos = 0;
 	    }
 	}
+    } else if (i == 0) {
+        DEBUGLOG(("ttysl_from_tty: read(%d,..) returned EOF\n", (int)(SWord)fd));
+        driver_failure_eof(ttysl_port);
     } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
         DEBUGLOG(("ttysl_from_tty: driver failure in read(%d,..) = %d (errno = %d)\n", (int)(SWord)fd, i, errno));
 	driver_failure(ttysl_port, -1);
