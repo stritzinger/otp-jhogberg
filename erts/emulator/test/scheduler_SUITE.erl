@@ -993,62 +993,81 @@ sct_cmd(Config) when is_list(Config) ->
 	 {"db", thread_no_node_processor_spread}]).
 
 sbt_cmd(Config) when is_list(Config) ->
-    Bind = try
-	      OldVal = erlang:system_flag(scheduler_bind_type, default_bind),
-	      erlang:system_flag(scheduler_bind_type, OldVal),
-	      go_for_it
-	  catch
-	      error:notsup -> notsup;
-		error:_ -> go_for_it
-	  end,
-    case Bind of
-	notsup ->
-	    {skipped, "Binding of schedulers not supported"};
-	go_for_it ->
-	    CpuTCmd = case erlang:system_info({cpu_topology,detected}) of
-			  undefined ->
-			      case os:type() of
-				  linux ->
-				      case erlang:system_info(logical_processors) of
-					  1 ->
-					      "+sctL0";
-					  N when is_integer(N) ->
-					      NS = integer_to_list(N-1),
-					      "+sctL0-"++NS++"p0-"++NS;
-					  _ ->
-					      false
-				      end;
-				  _ ->
-				      false
-			      end;
-			  _ ->
-			      ""
-		      end,
-	    case CpuTCmd of
-		false ->
-		    {skipped, "Don't know how to create cpu topology"};
-		_ ->
-		    case erlang:system_info(logical_processors) of
-			LP when is_integer(LP) ->
-			    OldRelFlags = clear_erl_rel_flags(),
-			    try
-				lists:foreach(fun ({ClBt, Bt}) ->
-						      sbt_test(Config,
-								     CpuTCmd,
-								     ClBt,
-								     Bt,
-								     LP)
-					      end,
-					      ?BIND_TYPES)
-			    after
-				restore_erl_rel_flags(OldRelFlags)
-			    end,
-			    ok;
-			_ ->
-			    {skipped,
-				   "Don't know the amount of logical processors"}
-		    end
-	    end
+    case sbt_check_prereqs() of
+        {skipped, _Reason}=Skipped ->
+            Skipped;
+        ok ->
+            case sbt_make_topology_args() of
+                false ->
+                    {skipped, "Don't know how to create cpu topology"};
+                CpuTCmd ->
+                    LP = erlang:system_info(logical_processors),
+                    OldRelFlags = clear_erl_rel_flags(),
+                    try
+                        lists:foreach(fun ({ClBt, Bt}) ->
+                                              sbt_test(Config, CpuTCmd,
+                                                       ClBt, Bt, LP)
+                                      end,
+                                      ?BIND_TYPES)
+                    after
+                        restore_erl_rel_flags(OldRelFlags)
+                    end,
+                    ok
+            end
+    end.
+
+sbt_make_topology_args() ->
+    case erlang:system_info({cpu_topology,detected}) of
+        undefined ->
+            case os:type() of
+                linux ->
+                    case erlang:system_info(logical_processors) of
+                        1 ->
+                            "+sctL0";
+                        N ->
+                            NS = integer_to_list(N - 1),
+                            "+sctL0-"++NS++"p0-"++NS
+                    end;
+                _ ->
+                    false
+            end;
+        _ ->
+            ""
+    end.
+
+sbt_check_prereqs() ->
+    try
+        Available = erlang:system_info(logical_processors_available),
+        Quota = erlang:system_info(cpu_quota),
+        if
+            Quota =:= unknown; Quota >= Available ->
+                ok;
+            Quota < Available ->
+                throw({skipped, "Test requires that CPU quota is greater than "
+                                "the number of available processors."})
+        end,
+
+        try
+            OldVal = erlang:system_flag(scheduler_bind_type, default_bind),
+            erlang:system_flag(scheduler_bind_type, OldVal)
+        catch
+            error:notsup ->
+                throw({skipped, "Scheduler binding not supported."});
+            error:_ ->
+                %% ?!
+                ok
+        end,
+
+        case erlang:system_info(logical_processors) of
+            Count when is_integer(Count) ->
+                ok;
+            unknown ->
+                throw({skipped, "Can't detect number of logical processors."})
+        end,
+
+        ok
+    catch
+        throw:{skip,_Reason}=Skip -> Skip
     end.
 
 sbt_test(Config, CpuTCmd, ClBt, Bt, LP) ->
