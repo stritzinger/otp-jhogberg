@@ -40,7 +40,7 @@
 -include("beam_ssa_opt.hrl").
 
 -import(lists, [all/2,append/1,duplicate/2,flatten/1,foldl/3,
-                keyfind/3,last/1,member/2,reverse/1,reverse/2,
+                keyfind/3,member/2,reverse/1,reverse/2,
                 splitwith/2,sort/1,takewhile/2,unzip/1]).
 
 -define(MAX_REPETITIONS, 16).
@@ -2035,32 +2035,75 @@ opt_sw([], Count, Acc) ->
 %%%
 
 ssa_opt_ne({#opt_st{ssa=Linear}=St, FuncDb}) ->
-    {St#opt_st{ssa=opt_ne(Linear)}, FuncDb}.
+    Candidates = opt_ne_scan(Linear, gb_sets:empty()),
+    {St#opt_st{ssa=opt_ne(Linear, Candidates)}, FuncDb}.
 
-opt_ne([{L,#b_blk{is=[_|_]=Is0,last=#b_br{bool=#b_var{}=Bool}}=Blk0}|Bs]) ->
-    case last(Is0) of
-        #b_set{op={bif,'=/='},dst=Bool}=I0 ->
-            I = I0#b_set{op={bif,'=:='}},
-            Blk = opt_ne_replace(I, Blk0),
-            [{L,Blk}|opt_ne(Bs)];
-        #b_set{op={bif,'/='},dst=Bool}=I0 ->
-            I = I0#b_set{op={bif,'=='}},
-            Blk = opt_ne_replace(I, Blk0),
-            [{L,Blk}|opt_ne(Bs)];
-        _ ->
-            [{L,Blk0}|opt_ne(Bs)]
+opt_ne_scan([{_L, #b_blk{is=Is,last=#b_br{bool=#b_var{}=Bool}}} | Bs],
+            Candidates0) ->
+    case gb_sets:is_element(Bool, Candidates0) of
+        true ->
+            Candidates1 = gb_sets:del_element(Bool, Candidates0),
+            Candidates = opt_ne_scan_other(Is, Candidates1),
+            opt_ne_scan(Bs, Candidates);
+        false ->
+            Candidates = opt_ne_scan_candidate(Is, Bool, Candidates0),
+            opt_ne_scan(Bs, Candidates)
     end;
-opt_ne([{L,Blk}|Bs]) ->
-    [{L,Blk}|opt_ne(Bs)];
-opt_ne([]) -> [].
+opt_ne_scan([{_L, #b_blk{is=Is,last=Last}} | Bs], Candidates0) ->
+    Candidates1 = opt_ne_scan_instr(Last, Candidates0),
+    Candidates = opt_ne_scan_other(Is, Candidates1),
 
-opt_ne_replace(I, #b_blk{is=Is0,last=#b_br{succ=Succ,fail=Fail}=Br0}=Blk) ->
-    Is = replace_last(Is0, I),
+    opt_ne_scan(Bs, Candidates);
+opt_ne_scan([], Candidates) ->
+    Candidates.
+
+opt_ne_scan_candidate([#b_set{op={bif,'=/='},dst=Bool}=I], Bool, Candidates0) ->
+    Candidates = opt_ne_scan_instr(I, Candidates0),
+    gb_sets:add_element(Bool, Candidates);
+opt_ne_scan_candidate([#b_set{op={bif,'/='},dst=Bool}=I], Bool, Candidates0) ->
+    Candidates = opt_ne_scan_instr(I, Candidates0),
+    gb_sets:add_element(Bool, Candidates);
+opt_ne_scan_candidate([I | Is], Bool, Candidates0) ->
+    Candidates = opt_ne_scan_instr(I, Candidates0),
+    opt_ne_scan_candidate(Is, Bool, Candidates);
+opt_ne_scan_candidate([], _Bool, Candidates) ->
+    Candidates.
+
+opt_ne_scan_other([I | Is], Candidates0) ->
+    Candidates = opt_ne_scan_instr(I, Candidates0),
+    opt_ne_scan_other(Is, Candidates);
+opt_ne_scan_other([], Candidates) ->
+    Candidates.
+
+opt_ne_scan_instr(I, Candidates0) ->
+    Used = gb_sets:from_ordset(beam_ssa:used(I)),
+    gb_sets:subtract(Candidates0, Used).
+
+opt_ne([{L, #b_blk{last=#b_br{bool=#b_var{}=Bool}}=Blk0} | Bs],
+       Candidates) ->
+    case gb_sets:is_element(Bool, Candidates) of
+        true ->
+            Blk = opt_ne_replace(Blk0),
+            [{L, Blk} | opt_ne(Bs, Candidates)];
+        false ->
+            [{L, Blk0} | opt_ne(Bs, Candidates)]
+    end;
+opt_ne([{L, Blk} | Bs], Candidates) ->
+    [{L, Blk} | opt_ne(Bs, Candidates)];
+opt_ne([], _Candidates) ->
+    [].
+
+opt_ne_replace(#b_blk{is=Is0,last=#b_br{succ=Succ,fail=Fail}=Br0}=Blk) ->
+    Is = opt_ne_replace_is(Is0),
     Br = Br0#b_br{succ=Fail,fail=Succ},
     Blk#b_blk{is=Is,last=Br}.
 
-replace_last([_], Repl) -> [Repl];
-replace_last([I|Is], Repl) -> [I|replace_last(Is, Repl)].
+opt_ne_replace_is([#b_set{op={bif,'=/='}}=I]) ->
+    [I#b_set{op={bif,'=:='}}];
+opt_ne_replace_is([#b_set{op={bif,'/='}}=I]) ->
+    [I#b_set{op={bif,'=='}}];
+opt_ne_replace_is([I | Is]) when Is =/= [] ->
+    [I | opt_ne_replace_is(Is)].
 
 %%%
 %%% Merge blocks.
