@@ -142,6 +142,52 @@
     </func>
 
     <func>
+      <name name="fold_path" arity="3" since="@OTP-16488@"/>
+      <fsummary>Fold over all objects in a directory.</fsummary>
+      <desc>
+        <p>Equivalent to <c>fold_path(Fun, Acc, Dir, [recursive])</c>.</p>
+      </desc>
+    </func>
+
+    <func>
+      <name name="fold_path" arity="4" since="@OTP-16488@"/>
+      <fsummary>Fold over all objects in a directory.</fsummary>
+      <desc>
+        <p>Folds function <c><anno>Fun</anno></c> over all filesystem objects
+          in directory <c><anno>Dir</anno></c>, providing an absolute path to
+          each object as well as its
+          <seealso marker="kernel:file#type-file_info">
+            <c>file:file_info()</c>
+          </seealso> on every application.
+        </p>
+
+        <p>The following options may be given:</p>
+        <taglist>
+          <tag>recursive</tag>
+          <item>
+            <p>All subdirectories are processed.</p>
+          </item>
+          <tag>follow_links</tag>
+          <item>
+            <p>Follow all links instead of presenting them as they are, making
+              a link to a file appear as a file, and a link to a directory
+              appear as a directory. Care should be taken when using this
+              together with the <c>recursive</c> option as this function will
+              not return if it encounters a cycle.</p>
+          </item>
+        </taglist>
+
+        <p>If Unicode filename translation is in effect and the file
+          system is transparent, filenames that cannot be
+          interpreted as Unicode can be encountered, in which case the
+          <c>fun()</c> must be prepared to handle raw filenames
+          (that is, binaries).</p>
+        <p>For more information about raw filenames, see the
+          <seealso marker="kernel:file"><c>file</c></seealso> module.</p>
+      </desc>
+    </func>
+
+    <func>
       <name name="is_dir" arity="1" since=""/>
       <fsummary>Test whether <c>Name</c> refers to a directory.</fsummary>
       <desc>

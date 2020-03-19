@@ -21,9 +21,9 @@
 
 %% File utilities.
 -export([wildcard/1, wildcard/2, is_dir/1, is_file/1, is_regular/1]).
--export([fold_files/5, last_modified/1, file_size/1, ensure_dir/1]).
+-export([fold_files/5, fold_paths/3, last_modified/1, file_size/1, ensure_dir/1]).
 -export([wildcard/3, is_dir/2, is_file/2, is_regular/2]).
--export([fold_files/6, last_modified/2, file_size/2]).
+-export([fold_files/6, fold_paths/4, last_modified/2, file_size/2]).
 -export([find_file/2, find_file/3, find_source/1, find_source/2, find_source/3]).
 -export([safe_relative_path/2]).
 
@@ -46,6 +46,11 @@
 
 -type filename_all() :: file:name_all().
 -type dirname_all() :: filename_all().
+
+%% Internal record for fold_paths/3,4
+-record(fp_opts, { fold :: fun((_, _, _) -> _),
+                   read_info :: fun((_) -> _),
+                   recursive :: boolean() }).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -107,6 +112,40 @@ fold_files(Dir, RegExp, Recursive, Fun, Acc) ->
 -spec fold_files(file:name(), string(), boolean(), fun((_,_) -> _), _, atom()) -> _.
 fold_files(Dir, RegExp, Recursive, Fun, Acc, Mod) when is_atom(Mod) ->
     do_fold_files(Dir, RegExp, Recursive, Fun, Acc, Mod).
+
+-spec fold_paths(Fun, AccIn, Dir) -> AccOut when
+      Fun :: fun((F :: file:filename(),
+                  I :: file:file_info(),
+                  AccIn) -> AccOut),
+      AccIn :: term(),
+      Dir :: dirname(),
+      AccOut :: term().
+fold_paths(Fun, Acc, Dir) ->
+    fold_paths(Fun, Acc, Dir, [recursive]).
+
+-spec fold_paths(Fun, AccIn, Dir, Opts) -> AccOut when
+      Fun :: fun((F :: file:filename(),
+                  I :: file:file_info(),
+                  AccIn) -> AccOut),
+      AccIn :: term(),
+      Dir :: dirname(),
+      AccOut :: term(),
+      Opts :: list(recursive | {recursive,boolean()} |
+                   follow_links | {follow_links,boolean()}).
+fold_paths(Fun, Acc, Dir, Opts0) ->
+    ReadInfo = case proplists:get_value(follow_links, Opts0, false) of
+                   true -> fun file:read_file_info/1;
+                   false -> fun file:read_link_info/1
+               end,
+    Recursive = proplists:get_value(recursive, Opts0, false),
+
+    Opts = #fp_opts{ fold = Fun,
+                     read_info = ReadInfo,
+                     recursive = Recursive },
+
+    AbsPath = filename:absname(Dir),
+    Paths = fp_list_dir(AbsPath),
+    do_fold_paths(Paths, Opts, Acc).
 
 -spec last_modified(Name) -> file:date_time() | 0 when
       Name :: filename_all() | dirname_all().
@@ -200,6 +239,32 @@ do_fold_files2([File|T], Dir, RegExp, OrigRE, Recursive, Fun, Acc0, Mod) ->
 		false ->
 		    do_fold_files2(T, Dir, RegExp, OrigRE, Recursive, Fun, Acc0, Mod)
 	    end
+    end.
+
+do_fold_paths([Path | Paths], Opts, Acc0) ->
+    #fp_opts { read_info = ReadInfo, fold = Fold } = Opts,
+    case ReadInfo(Path) of
+        {ok, #file_info{type=Type}=Info} ->
+            Acc = Fold(Path, Info, Acc0),
+            case Type of
+                directory when Opts#fp_opts.recursive ->
+                    Contents = fp_list_dir(Path),
+                    do_fold_paths(Contents ++ Paths, Opts, Acc);
+                _ ->
+                    do_fold_paths(Paths, Opts, Acc)
+            end;
+        {error, _Error} ->
+            do_fold_paths(Paths, Opts, Acc0)
+    end;
+do_fold_paths([], _Opts, Acc) ->
+    Acc.
+
+fp_list_dir(AbsDir) ->
+    case file:list_dir(AbsDir) of
+        {ok, Contents} ->
+            [filename:absname(Name, AbsDir) || Name <- Contents];
+        {error, _Error} ->
+            []
     end.
 
 do_last_modified(File, Mod) ->

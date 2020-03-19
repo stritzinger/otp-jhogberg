@@ -27,7 +27,7 @@
 	 fold_files/1,otp_5960/1,ensure_dir_eexist/1,ensure_dir_symlink/1,
 	 wildcard_symlink/1, is_file_symlink/1, file_props_symlink/1,
          find_source/1, find_source_subdir/1, safe_relative_path/1,
-         safe_relative_path_links/1]).
+         safe_relative_path_links/1,fold_paths/1]).
 
 -import(lists, [foreach/2]).
 
@@ -51,7 +51,7 @@ all() ->
      fold_files, otp_5960, ensure_dir_eexist, ensure_dir_symlink,
      wildcard_symlink, is_file_symlink, file_props_symlink,
      find_source, find_source_subdir, safe_relative_path,
-     safe_relative_path_links].
+     safe_relative_path_links,fold_paths].
 
 groups() -> 
     [].
@@ -379,8 +379,40 @@ fold_files(Config) when is_list(Config) ->
     foreach(fun(D) -> ok = file:del_dir(D) end, lists:reverse(Dirs)),
     ok = file:del_dir(Dir).
 
+fold_paths(Config) when is_list(Config) ->
+    Dir = filename:join(proplists:get_value(priv_dir, Config), "fold_files"),
+    ok = file:make_dir(Dir),
+
+    Dirs = [filename:join(Dir, D) || D <- ["blurf","blurf/blarf"]],
+    foreach(fun(D) -> ok = file:make_dir(D) end, Dirs),
+
+    AllFiles = ["fb.txt","ko.txt",
+                "blurf/nisse.text",
+                "blurf/blarf/aaa.txt",
+                "blurf/blarf/urfa.txt"],
+    AllDirs = ["blurf", "blurf/blarf"],
+    _ = mkfiles(AllFiles, Dir),
+
+    %% Create an evil cycle to test recursion.
+    LinkName = filename:absname("blurf/blarf/link", Dir),
+    All = case file:make_symlink("../blarf", LinkName) of
+              ok -> [LinkName | (AllDirs ++ AllFiles)];
+              _ -> AllDirs ++ AllFiles
+          end,
+
+    %% Test.
+    Files0 = filelib:fold_paths(fun(H, _, T) -> [H|T] end, [], Dir, [{recursive,false}]),
+    same_lists(["fb.txt","ko.txt","blurf"], Files0, Dir),
+
+    Files1 = filelib:fold_paths(fun(H, _, T) -> [H|T] end, [], Dir),
+    same_lists(All, Files1, Dir),
+
+    %% FIXME: PR #2565
+    ok = file:del_dir_r(Dir).
+
 same_lists(Expected0, Actual0, BaseDir) ->
-    Expected = [filename:absname(N, BaseDir) || N <- lists:sort(Expected0)],
+    Expected1 = [filename:absname(N, BaseDir) || N <- Expected0],
+    Expected = lists:sort(Expected1),
     Actual = lists:sort(Actual0),
     Expected = Actual.
 
