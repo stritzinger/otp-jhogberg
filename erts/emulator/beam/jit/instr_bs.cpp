@@ -906,6 +906,49 @@ x86::Mem BeamModuleAssembler::emit_bs_get_integer_prologue(Label next,
     }
 }
 
+void BeamModuleAssembler::emit_i_bs_get_integer_1(const ArgVal &Ctx,
+                                                  const ArgVal &Flags,
+                                                  const ArgVal &Fail,
+                                                  const ArgVal &Dst) {
+    Label next = a.newLabel();
+    x86::Mem address;
+
+    mov_arg(ARG4, Ctx);
+
+    a.mov(ARG2, emit_boxed_val(ARG4, offsetof(ErlBinMatchState, mb.offset)));
+    a.lea(ARG3, x86::qword_ptr(ARG2, 1));
+    a.cmp(ARG3, emit_boxed_val(ARG4, offsetof(ErlBinMatchState, mb.size)));
+    a.ja(labels[Fail.getValue()]);
+
+    /* Bump the match context's position. */
+    a.mov(emit_boxed_val(ARG4, offsetof(ErlBinMatchState, mb.offset)), ARG3);
+
+    /* Read base address. */
+    a.mov(ARG1, emit_boxed_val(ARG4, offsetof(ErlBinMatchState, mb.base)));
+
+    /* Save the lowest bits of the current position so we know how much the
+     * result should be shifted. */
+    a.mov(ARG5, ARG2);
+    a.and_(ARG5d, imm(7));
+
+    /* Truncate current position to bytes, then read it. */
+    a.shr(ARG2, imm(3));
+    a.movzx(RETd, x86::byte_ptr(ARG1, ARG2));
+
+    ASSERT(x86::ecx != ARG5d);
+
+    a.mov(x86::ecx, imm(7));
+    a.sub(x86::ecx, ARG5d);
+    a.shr(RETd, x86::cl);
+    a.and_(RETd, imm(1));
+
+    a.shl(RETd, imm(_TAG_IMMED1_SIZE));
+    a.or_(RETd, imm(_TAG_IMMED1_SMALL));
+
+    a.bind(next);
+    mov_arg(Dst, RET);
+}
+
 void BeamModuleAssembler::emit_i_bs_get_integer_8(const ArgVal &Ctx,
                                                   const ArgVal &Flags,
                                                   const ArgVal &Fail,

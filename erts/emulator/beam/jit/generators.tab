@@ -30,6 +30,12 @@ gen.get_integer2(Fail, Ms, Live, Size, Unit, Flags, Dst) {
         if (!beam_load_safe_mul(Size.val, Unit.val, &bits)) {
             $BeamOpNameArity(op, jump, 1);
             op->a[0] = Fail;
+        } else if (bits == 1) {
+            $BeamOpNameArity(op, i_bs_get_integer_1, 4);
+            op->a[0] = Ms;
+            op->a[1] = Flags;
+            op->a[2] = Fail;
+            op->a[3] = Dst;
         } else if (bits == 8) {
             $BeamOpNameArity(op, i_bs_get_integer_8, 4);
             op->a[0] = Ms;

@@ -788,6 +788,7 @@ bs_get_integer2 Fail=f Ms=xy Live=u Sz=sq Unit=u Flags=u Dst=d => \
 
 i_bs_get_integer S f? t t s d
 
+i_bs_get_integer_1 S t f? d
 i_bs_get_integer_8 S t f? d
 i_bs_get_integer_16 S t f? d
 i_bs_get_integer_32 S t f? d
