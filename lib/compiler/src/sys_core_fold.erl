@@ -646,6 +646,7 @@ eval_binary_1([#c_bitstr{val=#c_literal{val=Val},size=#c_literal{val=Sz},
 	float when is_float(Val) ->
 	    %% Bad float size.
 	    try Sz*Unit of
+		16 -> ok;
 		32 -> ok;
 		64 -> ok;
 		_ ->

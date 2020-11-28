@@ -1986,7 +1986,7 @@ bit_type(Line, Size0, Type, St) ->
 
 %% bit_size_check(Line, Size, BitType, State) -> {BitSize,State}.
 %%  Do some checking & warnings on types
-%%   float == 32 or 64
+%%   float == 16 or 32 or 64
 
 bit_size_check(_Line, unknown, _, St) -> {unknown,St};
 bit_size_check(_Line, undefined, #bittype{type=Type}, St) ->
@@ -2002,6 +2002,7 @@ bit_size_check(Line, Size, #bittype{type=Type,unit=Unit}, St) ->
     St2 = elemtype_check(Line, Type, Sz, St),
     {Sz,St2}.
 
+elemtype_check(_Line, float, 16, St) -> St;
 elemtype_check(_Line, float, 32, St) -> St;
 elemtype_check(_Line, float, 64, St) -> St;
 elemtype_check(Line, float, _Size, St) ->
