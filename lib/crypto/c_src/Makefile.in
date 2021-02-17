@@ -143,10 +143,11 @@ AR_FLAGS=
 else
 AR_OUT=
 ifeq ($(V),0)
-AR_FLAGS=rc
+AR_FLAGS=rcD
 else
-AR_FLAGS=rcv
+AR_FLAGS=rcvD
 endif
+RANLIB_FLAGS=-D
 endif
 
 ifndef RANLIB
@@ -194,7 +195,7 @@ $(OBJDIR)/%_static$(TYPEMARKER).o: %.c
 
 $(LIBDIR)/crypto$(TYPEMARKER).a: $(CRYPTO_STATIC_OBJS)
 	$(V_AR) $(AR_FLAGS) $(AR_OUT)$@ $(CRYPTO_STATIC_OBJS)
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 
 $(LIBDIR)/crypto$(TYPEMARKER).dll: $(CRYPTO_OBJS)
 	$(V_at)$(INSTALL_DIR) $(LIBDIR)

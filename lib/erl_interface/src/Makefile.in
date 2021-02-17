@@ -90,9 +90,9 @@ AR = @AR@
 RANLIB = @RANLIB@
 
 ifeq ($(V),0)
-AR_FLAGS=rc
+AR_FLAGS=rcD
 else
-AR_FLAGS=rcv
+AR_FLAGS=rcvD
 endif
 
 INCFLAGS = -I. -I../include -Iconnect -Iencode -Idecode -Imisc -Iepmd \
@@ -102,6 +102,7 @@ ifeq ($(USING_VC),yes)
 WARNFLAGS = -Wall
 else
 WARNFLAGS = @WFLAGS@
+RANLIB_FLAGS=-D
 endif
 
 WARNFLAGS += -DEI_NO_DEPR_WARN
@@ -469,19 +470,19 @@ ifeq ($(TARGET),win32)
 
 $(ST_EILIB) : $(ST_EIOBJECTS)
 	$(V_AR) -out:$@ $(ST_EIOBJECTS)
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 
 $(MT_EILIB) : $(MT_EIOBJECTS)
 	$(V_AR) -out:$@ $(MT_EIOBJECTS)
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 
 $(MD_EILIB) : $(MD_EIOBJECTS)
 	$(V_AR) -out:$@ $(MD_EIOBJECTS)
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 
 $(MDD_EILIB) : $(MDD_EIOBJECTS)
 	$(V_AR) -out:$@ $(MDD_EIOBJECTS)
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 
 else
 
@@ -491,7 +492,7 @@ $(ST_EILIB) : $(ST_EIOBJECTS)
 	$(V_at)rm -f $@
 	$(V_AR) $(AR_FLAGS) $@ $(ST_EIOBJECTS)
 ifdef RANLIB
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 endif
 
 
@@ -499,7 +500,7 @@ $(MT_EILIB) : $(MT_EIOBJECTS)
 	$(V_at)rm -f $@
 	$(V_AR) $(AR_FLAGS) $@ $(MT_EIOBJECTS)
 ifdef RANLIB
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 endif
 
 endif

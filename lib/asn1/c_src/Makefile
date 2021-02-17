@@ -81,10 +81,11 @@ AR_FLAGS=
 else
 AR_OUT=
 ifeq ($(V),0)
-AR_FLAGS=rc
+AR_FLAGS=rcD
 else
-AR_FLAGS=rcv
+AR_FLAGS=rcvD
 endif
+RANLIB_FLAGS=-D
 endif
 
 ifndef RANLIB
@@ -123,7 +124,7 @@ $(OBJDIR)/%_static.o: %.c
 
 $(NIF_LIB_FILE): $(NIF_STATIC_OBJ_FILES)
 	$(V_AR) $(AR_FLAGS) $(AR_OUT)$@ $(NIF_STATIC_OBJ_FILES)
-	$(V_RANLIB) $@
+	$(V_RANLIB) $(RANLIB_FLAGS) $@
 
 $(NIF_SHARED_OBJ_FILE): $(NIF_OBJ_FILES)
 	$(V_LD) $(LDFLAGS) -o $(NIF_SHARED_OBJ_FILE) $(NIF_OBJ_FILES) $(CLIB_FLAGS) $(LIBS)
