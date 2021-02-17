@@ -1198,8 +1198,8 @@ generate_script(Output, Release, Appls, Flags) ->
     ScriptFile = Output ++ ".script",
     case file:open(ScriptFile, [write,{encoding,utf8}]) of
 	{ok, Fd} ->
-	    io:format(Fd, "%% ~s\n%% script generated at ~w ~w\n~tp.\n",
-		      [epp:encoding_to_string(utf8), date(), time(), Script]),
+	    io:format(Fd, "%% ~s\n%% This is a generated script.\n~tp.\n",
+		      [epp:encoding_to_string(utf8), Script]),
 	    case file:close(Fd) of
 		ok ->
 		    BootFile = Output ++ ".boot",
