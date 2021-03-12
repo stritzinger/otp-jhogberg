@@ -655,23 +655,49 @@ erts_clear_export_break(Module* modp, Export *ep)
  */
 static void fixup_cp_before_trace(Process *c_p, int *return_to_trace)
 {
+    const ErtsFrameLayout frame_layout = erts_frame_layout;
     Eterm *cpp = c_p->stop;
 
     for (;;) {
-        ErtsCodePtr w = cp_val(*cpp);
+        ErtsCodePtr w;
+
+        switch (frame_layout) {
+        case ERTS_FRAME_LAYOUT_FP_RA:
+            w = cp_val(cpp[1]);
+            break;
+        case ERTS_FRAME_LAYOUT_RA_FP:
+        case ERTS_FRAME_LAYOUT_RA:
+            w = cp_val(cpp[0]);
+            break;
+        default:
+            ERTS_INTERNAL_ERROR(!"unreachable");
+        }
+
         if (BeamIsReturnTrace(w)) {
-            cpp += 3;
+            cpp += 2 + CP_SIZE;
         } else if (BeamIsReturnToTrace(w)) {
             *return_to_trace = 1;
-            cpp += 1;
+            cpp += CP_SIZE;
         } else if (BeamIsReturnTimeTrace(w)) {
-            cpp += 2;
+            cpp += 1 + CP_SIZE;
         } else {
             break;
         }
     }
-    c_p->stop[0] = (Eterm) cp_val(*cpp);
-    ASSERT(is_CP(*cpp));
+
+    switch (frame_layout) {
+    case ERTS_FRAME_LAYOUT_FP_RA:
+    case ERTS_FRAME_LAYOUT_RA_FP:
+        c_p->stop[0] = cpp[0];
+        c_p->stop[1] = cpp[1];
+        break;
+    case ERTS_FRAME_LAYOUT_RA:
+        c_p->stop[0] = cpp[0];
+        ASSERT(c_p->frame_pointer == NULL);
+        break;
+    }
+
+    ASSERT(is_CP(cpp[0]));
 }
 
 BeamInstr

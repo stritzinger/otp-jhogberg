@@ -134,9 +134,11 @@ BeamModuleAssembler::BeamModuleAssembler(BeamGlobalAssembler *ga,
         a.ret();
 
         a.align(kAlignCode, 16);
+        ASSERT(a.offset() - code.labelOffsetFromBase(genericBPTramp) == 16 * 1);
         abs_jmp(ga->get_call_nif_early());
 
         a.align(kAlignCode, 16);
+        ASSERT(a.offset() - code.labelOffsetFromBase(genericBPTramp) == 16 * 2);
         aligned_call(ga->get_generic_bp_local());
         a.ret();
 

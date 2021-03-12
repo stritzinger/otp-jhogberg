@@ -88,8 +88,10 @@ void BeamGlobalAssembler::emit_handle_element_error() {
     a.mov(getXRef(1), ARG2);
     a.mov(x86::qword_ptr(c_p, offsetof(Process, freason)), imm(BADARG));
     a.mov(ARG4, imm(&mfa));
+
     a.jmp(labels[handle_error_shared_prologue]);
 }
+
 
 /*
  * ARG1 = Position (1-based)
@@ -100,6 +102,8 @@ void BeamGlobalAssembler::emit_handle_element_error() {
  */
 void BeamGlobalAssembler::emit_bif_element_shared() {
     Label error = a.newLabel();
+
+    emit_enter_frame();
 
     a.mov(RETd, ARG1d);
     a.and_(RETb, imm(_TAG_IMMED1_MASK));
@@ -128,6 +132,8 @@ void BeamGlobalAssembler::emit_bif_element_shared() {
     a.inc(ARG4);
     a.mov(RET, x86::qword_ptr(ARG5, ARG4, 3));
     a.test(RETd, RETd);
+
+    emit_leave_frame();
     a.ret();
 
     a.bind(error);
@@ -136,11 +142,22 @@ void BeamGlobalAssembler::emit_bif_element_shared() {
 
         a.test(ARG3, ARG3);
         a.short_().je(exception);
-        emit_discard_cp();
+        emit_unwind_frame();
         a.jmp(ARG3);
 
         a.bind(exception);
-        a.jmp(labels[handle_element_error]);
+        {
+            static ErtsCodeMFA mfa = {am_erlang, am_element, 2};
+
+            emit_leave_frame();
+
+            a.mov(getXRef(0), ARG1);
+            a.mov(getXRef(1), ARG2);
+            a.mov(x86::qword_ptr(c_p, offsetof(Process, freason)), imm(BADARG));
+            a.mov(ARG4, imm(&mfa));
+
+            a.jmp(labels[handle_error_shared_prologue]);
+        }
     }
 }
 

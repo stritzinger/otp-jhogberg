@@ -536,7 +536,21 @@ handle_error(Process* c_p, ErtsCodePtr pc, Eterm* reg,
              *
              * Therefore, we need to bump the stack pointer as if this were an
              * ordinary return. */
-            ASSERT(is_CP(c_p->stop[0]));
+
+            switch(erts_frame_layout) {
+            case ERTS_FRAME_LAYOUT_FP_RA:
+                ASSERT(is_CP(c_p->stop[0]) && is_CP(c_p->stop[1]));
+                c_p->frame_pointer = (Eterm*)cp_val(c_p->stop[0]);
+                break;
+            case ERTS_FRAME_LAYOUT_RA_FP:
+                ASSERT(is_CP(c_p->stop[0]) && is_CP(c_p->stop[1]));
+                c_p->frame_pointer = (Eterm*)cp_val(c_p->stop[1]);
+                break;
+            case ERTS_FRAME_LAYOUT_RA:
+                ASSERT(is_CP(c_p->stop[0]));
+                break;
+            }
+
             c_p->stop += CP_SIZE;
 #else
             /* To avoid keeping stale references. */
@@ -598,19 +612,21 @@ next_catch(Process* c_p, Eterm *reg) {
 		have_return_to_trace = !0; /* Record next cp */
 		return_to_trace_ptr = NULL;
 		/* Skip CP. */
-		ptr += 1;
+		ptr += CP_SIZE;
 	    } else if (BeamIsReturnTimeTrace(cp_val(*prev))) {
 		/* Skip prev_info and CP. */
-		ptr += 2;
+		ptr += 1 + CP_SIZE;
 	    } else {
 		if (have_return_to_trace) {
 		    /* Record this cp as possible return_to trace cp */
 		    have_return_to_trace = 0;
 		    return_to_trace_ptr = ptr;
 		} else return_to_trace_ptr = NULL;
-		ptr++;
+		ptr += CP_SIZE;
 	    }
-	} else ptr++;
+	} else {
+        ptr++;
+    }
     }
     return NULL;
 
@@ -1596,8 +1612,22 @@ erts_hibernate(Process* c_p, Eterm* reg)
     c_p->arg_reg[0] = module;
     c_p->arg_reg[1] = function;
     c_p->arg_reg[2] = args;
-    c_p->stop = c_p->hend - CP_SIZE;  /* Keep first continuation pointer */
-    ASSERT(c_p->stop[0] == make_cp(beam_normal_exit));
+    c_p->stop = c_p->hend - CP_SIZE; /* Keep first continuation pointer */
+
+    switch(erts_frame_layout) {
+    case ERTS_FRAME_LAYOUT_FP_RA:
+        ASSERT(c_p->stop[0] == make_cp(NULL));
+        ASSERT(c_p->stop[1] == make_cp(beam_normal_exit));
+        break;
+    case ERTS_FRAME_LAYOUT_RA_FP:
+        ASSERT(c_p->stop[0] == make_cp(beam_normal_exit));
+        ASSERT(c_p->stop[1] == make_cp(NULL));
+        break;
+    case ERTS_FRAME_LAYOUT_RA:
+        ASSERT(c_p->stop[0] == make_cp(beam_normal_exit));
+        break;
+    }
+
     c_p->catches = 0;
     c_p->i = beam_apply;
 

@@ -995,8 +995,9 @@ struct process {
      * shorter instruction can be used to access them.
      */
 
-    Eterm* htop;		/* Heap top */
-    Eterm* stop;		/* Stack top */
+    Eterm *htop;                /* Heap top */
+    Eterm *stop;                /* Stack top */
+    Eterm *frame_pointer;       /* Frame pointer */
     Sint fcalls;		/* Number of reductions left to execute.
 				 * Only valid for the current process.
 				 */

@@ -30,6 +30,7 @@ extern "C"
 
 /* Global configuration variables (under the `+J` prefix) */
 #ifdef HAVE_LINUX_PERF_SUPPORT
+ErtsFrameLayout ERTS_WRITE_UNLIKELY(erts_frame_layout);
 int erts_jit_perf_support;
 #endif
 
@@ -200,6 +201,16 @@ void beamasm_init() {
     Eterm mod_name;
     ERTS_DECL_AM(erts_beamasm);
     mod_name = AM_erts_beamasm;
+
+    /* erts_frame_layout is hardcoded to ERTS_FRAME_LAYOUT_RA when we lack
+     * perf support. */
+#ifdef HAVE_LINUX_PERF_SUPPORT
+    if (erts_jit_perf_support & BEAMASM_PERF_MAP) {
+        erts_frame_layout = ERTS_FRAME_LAYOUT_FP_RA;
+    } else {
+        erts_frame_layout = ERTS_FRAME_LAYOUT_RA;
+    }
+#endif
 
     beamasm_init_perf();
     beamasm_init_gdb_jit_info();
@@ -423,6 +434,12 @@ void BeamGlobalAssembler::emit_process_main() {
     {
         Label not_exiting = a.newLabel();
 
+#ifdef NATIVE_ERLANG_STACK
+        /* Kill the current frame pointer to avoid confusing `perf` and similar
+         * tools. */
+        a.sub(frame_pointer, frame_pointer);
+#endif
+
 #ifdef DEBUG
         Label check_i = a.newLabel();
         /* Check that ARG3 is set to a valid CP. */
@@ -433,6 +450,14 @@ void BeamGlobalAssembler::emit_process_main() {
 #endif
 
         a.mov(x86::qword_ptr(c_p, offsetof(Process, i)), ARG3);
+
+#ifdef HARDDEBUG
+        a.mov(ARG1, c_p);
+        a.mov(ARG2, x86::qword_ptr(c_p, offsetof(Process, frame_pointer)));
+        a.mov(ARG3, x86::qword_ptr(c_p, offsetof(Process, stop)));
+
+        runtime_call<3>(validate_stack_frames);
+#endif
 
 #ifdef WIN32
         a.mov(ARG1d, x86::dword_ptr(c_p, offsetof(Process, state.value)));
@@ -912,3 +937,36 @@ const uint8_t *BeamAssembler::nops[3] = {nop1, nop2, nop3};
 const uint8_t BeamAssembler::nop1[1] = {0x90};
 const uint8_t BeamAssembler::nop2[2] = {0x66, 0x90};
 const uint8_t BeamAssembler::nop3[3] = {0x0F, 0x1F, 0x00};
+
+#ifdef HARDDEBUG
+void validate_stack_frames(Process *p, Eterm *frame_ptr, Eterm *stack_top) {
+    Eterm *stack_bottom = HEAP_END(p);
+    Eterm *next_fp = frame_ptr;
+    Eterm *scanner = stack_top;
+
+    if (erts_frame_layout == ERTS_FRAME_LAYOUT_RA) {
+        return;
+    }
+
+    ASSERT(erts_frame_layout == ERTS_FRAME_LAYOUT_FP_RA);
+    ASSERT(next_fp);
+
+    /* Validates the frame chain, ensuring that it always points within
+        * the stack and that no frames are skipped. */
+    do {
+        ASSERT(next_fp >= stack_top && next_fp <= stack_bottom);
+
+        /* We may not skip any frames. */
+        while (scanner < next_fp) {
+            ASSERT(is_not_CP(scanner[0]));
+            scanner++;
+        }
+
+        /* {Next frame, Return address} */
+        ASSERT(is_CP(scanner[0]) && is_CP(scanner[1]));
+
+        next_fp = (Eterm*)cp_val(scanner[0]);
+        scanner += CP_SIZE;
+    }  while(next_fp);
+}
+#endif

@@ -124,12 +124,11 @@ void BeamGlobalAssembler::emit_debug_bp() {
 
     emit_leave_runtime<Update::eReductions | Update::eStack | Update::eHeap>();
 
-    /* Skip two frames so we can make a direct jump to the error handler. This
-     * makes it so that if we are to do a call_nif_early, we skip that and call
-     * the error handler's code instead, mirroring the way the interpreter
-     * works. */
-    emit_discard_cp();
-    emit_discard_cp();
+    /* Skip two return addresses so we can make a direct jump to the error
+     * handler. This makes it so that if we are to do a call_nif_early, we skip
+     * that and call the error handler's code instead, mirroring the way the
+     * interpreter works. */
+    a.add(x86::rsp, imm(16));
 
     a.test(RET, RET);
     a.je(error);

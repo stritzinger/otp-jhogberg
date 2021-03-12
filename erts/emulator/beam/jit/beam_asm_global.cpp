@@ -120,6 +120,8 @@ void BeamGlobalAssembler::emit_handle_error() {
 /* ARG3 = (HTOP + bytes needed) !!
  * ARG4 = Live registers */
 void BeamGlobalAssembler::emit_garbage_collect() {
+    emit_enter_frame();
+
     /* Convert ARG3 to words needed and move it to the correct argument slot */
     a.sub(ARG3, HTOP);
     a.shr(ARG3, imm(3));
@@ -127,7 +129,7 @@ void BeamGlobalAssembler::emit_garbage_collect() {
 
     /* Save our return address in c_p->i so we can tell where we crashed if we
      * do so during GC. */
-    a.mov(RET, x86::qword_ptr(x86::rsp));
+    a.mov(RET, x86::qword_ptr(x86::rsp, 8));
     a.mov(x86::qword_ptr(c_p, offsetof(Process, i)), RET);
 
     emit_enter_runtime<Update::eStack | Update::eHeap>();
@@ -139,6 +141,7 @@ void BeamGlobalAssembler::emit_garbage_collect() {
     a.sub(FCALLS, RET);
 
     emit_leave_runtime<Update::eStack | Update::eHeap>();
+    emit_leave_frame();
 
     a.ret();
 }
@@ -149,10 +152,11 @@ void BeamGlobalAssembler::emit_garbage_collect() {
  *
  * Assumes that c_p->current points into the MFA of an export entry. */
 void BeamGlobalAssembler::emit_bif_export_trap() {
-    int export_offset = offsetof(Export, info.mfa);
-
     a.mov(RET, x86::qword_ptr(c_p, offsetof(Process, current)));
-    a.sub(RET, export_offset);
+    a.sub(RET, imm(offsetof(Export, info.mfa)));
+
+    /* FIXME: This is technically a tail call? */
+    emit_leave_frame();
 
     a.jmp(emit_setup_export_call(RET));
 }
@@ -197,6 +201,7 @@ void BeamGlobalAssembler::emit_export_trampoline() {
         a.mov(ARG3, x86::qword_ptr(c_p, offsetof(Process, i)));
         a.mov(ARG4, x86::qword_ptr(RET, func_offset));
 
+        emit_enter_frame();
         a.jmp(labels[call_bif_shared]);
     }
 
@@ -252,6 +257,12 @@ void BeamModuleAssembler::emit_handle_error(Label I, const ErtsCodeMFA *exp) {
     /* The CP must be reserved for try/catch to work, so we'll fake a call with
      * the return address set to the error address. */
     a.push(ARG2);
+
+    if (erts_frame_layout == ERTS_FRAME_LAYOUT_FP_RA) {
+        a.push(x86::rbp);
+    } else {
+        ASSERT(erts_frame_layout == ERTS_FRAME_LAYOUT_RA);
+    }
 #endif
 
     abs_jmp(ga->get_handle_error_shared());
@@ -276,6 +287,12 @@ void BeamGlobalAssembler::emit_handle_error_shared_prologue() {
 
 #ifdef NATIVE_ERLANG_STACK
     a.push(ARG2);
+
+    if (erts_frame_layout == ERTS_FRAME_LAYOUT_FP_RA) {
+        a.push(x86::rbp);
+    } else {
+        ASSERT(erts_frame_layout == ERTS_FRAME_LAYOUT_RA);
+    }
 #endif
 
     a.jmp(labels[handle_error_shared]);

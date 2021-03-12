@@ -168,6 +168,8 @@ void BeamGlobalAssembler::emit_i_loop_rec_shared() {
     x86::Mem await_addr = TMP_MEM1q, message_ptr = TMP_MEM2q,
              get_out = TMP_MEM3d;
 
+    emit_enter_frame();
+
     a.or_(x86::dword_ptr(c_p, offsetof(Process, flags)), imm(F_DELAY_GC));
     a.mov(x86::qword_ptr(c_p, offsetof(Process, i)), ARG1);
     a.mov(await_addr, ARG2);
@@ -231,7 +233,7 @@ void BeamGlobalAssembler::emit_i_loop_rec_shared() {
          * Note that the message queue lock is still held in this case. */
         a.and_(x86::dword_ptr(c_p, offsetof(Process, flags)), imm(~F_DELAY_GC));
 
-        emit_discard_cp();
+        emit_unwind_frame();
         a.jmp(await_addr);
     }
 
@@ -243,7 +245,7 @@ void BeamGlobalAssembler::emit_i_loop_rec_shared() {
         a.mov(x86::qword_ptr(c_p, offsetof(Process, arity)), imm(0));
         a.mov(x86::qword_ptr(c_p, offsetof(Process, current)), imm(0));
 
-        emit_discard_cp();
+        emit_unwind_frame();
         a.jmp(labels[do_schedule]);
     }
 
@@ -276,6 +278,7 @@ void BeamGlobalAssembler::emit_i_loop_rec_shared() {
         a.mov(ARG1, x86::qword_ptr(ARG1, offsetof(ErtsMessage, m[0])));
         a.mov(getXRef(0), ARG1);
 
+        emit_leave_frame();
         a.ret();
     }
 }

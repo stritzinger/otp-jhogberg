@@ -69,6 +69,7 @@ void BeamModuleAssembler::emit_is_both_small(Label fail, x86::Gp A, x86::Gp B) {
 void BeamGlobalAssembler::emit_increment_body_shared() {
     Label error = a.newLabel();
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     a.mov(ARG1, c_p);
@@ -76,10 +77,10 @@ void BeamGlobalAssembler::emit_increment_body_shared() {
     runtime_call<3>(erts_mixed_plus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.short_().je(error);
-
     a.ret();
 
     a.bind(error);
@@ -120,6 +121,7 @@ void BeamGlobalAssembler::emit_plus_body_shared() {
 
     Label error = a.newLabel();
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     /* Save original arguments for the error path. */
@@ -130,10 +132,10 @@ void BeamGlobalAssembler::emit_plus_body_shared() {
     runtime_call<3>(erts_mixed_plus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.short_().je(error);
-
     a.ret();
 
     a.bind(error);
@@ -150,6 +152,7 @@ void BeamGlobalAssembler::emit_plus_body_shared() {
 }
 
 void BeamGlobalAssembler::emit_plus_guard_shared() {
+    emit_enter_frame();
     emit_enter_runtime();
 
     a.mov(ARG1, c_p);
@@ -157,6 +160,7 @@ void BeamGlobalAssembler::emit_plus_guard_shared() {
     runtime_call<3>(erts_mixed_plus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     /* Set ZF if the addition failed. */
     emit_test_the_non_value(RET);
@@ -200,6 +204,7 @@ void BeamGlobalAssembler::emit_minus_body_shared() {
 
     Label error = a.newLabel();
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     /* Save original arguments for the error path. */
@@ -210,10 +215,10 @@ void BeamGlobalAssembler::emit_minus_body_shared() {
     runtime_call<3>(erts_mixed_minus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.short_().je(error);
-
     a.ret();
 
     a.bind(error);
@@ -230,6 +235,7 @@ void BeamGlobalAssembler::emit_minus_body_shared() {
 }
 
 void BeamGlobalAssembler::emit_minus_guard_shared() {
+    emit_enter_frame();
     emit_enter_runtime();
 
     a.mov(ARG1, c_p);
@@ -237,6 +243,7 @@ void BeamGlobalAssembler::emit_minus_guard_shared() {
     runtime_call<3>(erts_mixed_minus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     /* Set ZF if the addition failed. */
     emit_test_the_non_value(RET);
@@ -288,6 +295,7 @@ void BeamGlobalAssembler::emit_unary_minus_body_shared() {
 
     Label error = a.newLabel();
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     /* Save original arguments for the error path. */
@@ -297,10 +305,10 @@ void BeamGlobalAssembler::emit_unary_minus_body_shared() {
     runtime_call<2>(erts_unary_minus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.short_().je(error);
-
     a.ret();
 
     a.bind(error);
@@ -315,6 +323,7 @@ void BeamGlobalAssembler::emit_unary_minus_body_shared() {
 }
 
 void BeamGlobalAssembler::emit_unary_minus_guard_shared() {
+    emit_enter_frame();
     emit_enter_runtime();
 
     a.mov(ARG1, c_p);
@@ -322,6 +331,7 @@ void BeamGlobalAssembler::emit_unary_minus_guard_shared() {
     runtime_call<2>(erts_unary_minus);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     /* Set ZF if the negation failed. */
     emit_test_the_non_value(RET);
@@ -367,6 +377,8 @@ void BeamModuleAssembler::emit_i_unary_minus(const ArgVal &Src,
  * Quotient is returned in RAX, remainder in RDX. Error is indicated by ZF. */
 void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
     Label exit = a.newLabel(), generic = a.newLabel();
+
+    emit_enter_frame();
 
     a.cmp(ARG4, imm(SMALL_ZERO));
     a.je(exit);
@@ -431,7 +443,10 @@ void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
     /* Return with a potential error in ZF. It will be set if we came here from
      * the guard against SMALL_ZERO or if we're returning THE_NON_VALUE. */
     a.bind(exit);
-    a.ret();
+    {
+        emit_leave_frame();
+        a.ret();
+    }
 }
 
 /* ARG1 = LHS, ARG4 (!) = RHS, ARG5 = error MFA
@@ -443,6 +458,8 @@ void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
 void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
     Label div_zero = a.newLabel(), generic_div = a.newLabel(),
           generic_error = a.newLabel(), error = a.newLabel();
+
+    emit_enter_frame();
 
     a.cmp(ARG4, imm(SMALL_ZERO));
     a.je(div_zero);
@@ -478,6 +495,7 @@ void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
     a.cmp(ARG6, imm(1));
     a.short_().jge(generic_div);
 
+    emit_leave_frame();
     a.ret();
 
     a.bind(generic_div);
@@ -497,6 +515,7 @@ void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
         runtime_call<5>(erts_int_div_rem);
 
         emit_leave_runtime();
+        emit_leave_frame();
 
         a.test(RET, RET);
 
@@ -510,6 +529,8 @@ void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
 
     a.bind(div_zero);
     {
+        emit_leave_frame();
+
         /* Set up a badarith exception and place the original arguments in
          * x-registers. */
         a.mov(x86::qword_ptr(c_p, offsetof(Process, freason)),
@@ -617,6 +638,7 @@ void BeamModuleAssembler::emit_i_m_div(const ArgVal &Fail,
     mov_arg(ARG2, LHS);
     mov_arg(ARG3, RHS);
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     /* Must be set last since mov_arg() may clobber ARG1 */
@@ -635,7 +657,10 @@ void BeamModuleAssembler::emit_i_m_div(const ArgVal &Fail,
     }
 
     a.bind(next);
-    mov_arg(Dst, RET);
+    {
+        emit_leave_frame();
+        mov_arg(Dst, RET);
+    }
 }
 
 /* ARG1 = LHS, ARG4 (!) = RHS
@@ -667,6 +692,7 @@ void BeamGlobalAssembler::emit_times_guard_shared() {
 
     a.bind(generic);
     {
+        emit_enter_frame();
         emit_enter_runtime();
 
         a.mov(ARG2, ARG1);
@@ -675,6 +701,7 @@ void BeamGlobalAssembler::emit_times_guard_shared() {
         runtime_call<3>(erts_mixed_times);
 
         emit_leave_runtime();
+        emit_leave_frame();
 
         emit_test_the_non_value(RET); /* Sets ZF for use in caller */
 
@@ -693,6 +720,8 @@ void BeamGlobalAssembler::emit_times_body_shared() {
 
     Label generic = a.newLabel(), error = a.newLabel();
 
+    emit_enter_frame();
+
     /* Are both smalls? */
     a.mov(ARG2d, ARG1d);
     a.and_(ARG2d, ARG4d);
@@ -709,6 +738,7 @@ void BeamGlobalAssembler::emit_times_body_shared() {
 
     a.or_(RET, imm(_TAG_IMMED1_SMALL));
 
+    emit_leave_frame();
     a.ret();
 
     a.bind(generic);
@@ -725,10 +755,10 @@ void BeamGlobalAssembler::emit_times_body_shared() {
         runtime_call<3>(erts_mixed_times);
 
         emit_leave_runtime();
+        emit_leave_frame();
 
         emit_test_the_non_value(RET);
         a.short_().je(error);
-
         a.ret();
     }
 
@@ -769,6 +799,7 @@ void BeamModuleAssembler::emit_i_times(const ArgVal &Fail,
  * Result is returned in RET. Error is indicated by ZF. */
 template<typename T>
 void BeamGlobalAssembler::emit_bitwise_fallback_guard(T(*func_ptr)) {
+    emit_enter_frame();
     emit_enter_runtime();
 
     a.mov(ARG1, c_p);
@@ -777,6 +808,7 @@ void BeamGlobalAssembler::emit_bitwise_fallback_guard(T(*func_ptr)) {
     runtime_call<3>(func_ptr);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.ret();
@@ -790,6 +822,7 @@ void BeamGlobalAssembler::emit_bitwise_fallback_body(T(*func_ptr),
                                                      const ErtsCodeMFA *mfa) {
     Label error = a.newLabel();
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     /* Save original arguments for the error path. */
@@ -802,10 +835,10 @@ void BeamGlobalAssembler::emit_bitwise_fallback_body(T(*func_ptr),
     runtime_call<3>(func_ptr);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.short_().je(error);
-
     a.ret();
 
     a.bind(error);
@@ -967,6 +1000,7 @@ void BeamGlobalAssembler::emit_i_bnot_guard_shared() {
     /* Undo the speculative inversion in module code */
     a.xor_(RET, imm(~_TAG_IMMED1_MASK));
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     a.mov(ARG1, c_p);
@@ -974,6 +1008,7 @@ void BeamGlobalAssembler::emit_i_bnot_guard_shared() {
     runtime_call<2>(erts_bnot);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.ret();
@@ -990,6 +1025,7 @@ void BeamGlobalAssembler::emit_i_bnot_body_shared() {
     /* Undo the speculative inversion in module code */
     a.xor_(RET, imm(~_TAG_IMMED1_MASK));
 
+    emit_enter_frame();
     emit_enter_runtime();
 
     /* Save original arguments for the error path. */
@@ -1000,10 +1036,10 @@ void BeamGlobalAssembler::emit_i_bnot_body_shared() {
     runtime_call<2>(erts_bnot);
 
     emit_leave_runtime();
+    emit_leave_frame();
 
     emit_test_the_non_value(RET);
     a.short_().je(error);
-
     a.ret();
 
     a.bind(error);

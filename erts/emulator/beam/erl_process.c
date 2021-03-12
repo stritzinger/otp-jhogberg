@@ -11865,7 +11865,7 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     p->high_water = p->heap;
     p->gen_gcs = 0;
     p->hend = p->heap + sz;
-    p->stop = p->hend - 1;     /* Reserve place for continuation pointer */
+    p->stop = p->hend - CP_SIZE; /* Reserve place for continuation pointer. */
     p->htop = p->heap;
     p->heap_sz = sz;
     p->abandoned_heap = NULL;
@@ -11883,7 +11883,25 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     p->current = &p->u.initial;
 
     p->i = beam_apply;
-    p->stop[0] = make_cp(beam_normal_exit);
+
+    switch (erts_frame_layout) {
+    case ERTS_FRAME_LAYOUT_FP_RA:
+        p->stop[0] = make_cp(NULL);
+        p->stop[1] = make_cp(beam_normal_exit);
+
+        p->frame_pointer = &p->stop[0];
+        break;
+    case ERTS_FRAME_LAYOUT_RA_FP:
+        p->stop[0] = make_cp(beam_normal_exit);
+        p->stop[1] = make_cp(NULL);
+
+        p->frame_pointer = &p->stop[1];
+        break;
+    case ERTS_FRAME_LAYOUT_RA:
+        p->stop[0] = make_cp(beam_normal_exit);
+        p->frame_pointer = NULL;
+        break;
+    }
 
     p->arg_reg = p->def_arg_reg;
     p->max_arg_reg = sizeof(p->def_arg_reg)/sizeof(p->def_arg_reg[0]);

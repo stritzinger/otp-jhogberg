@@ -54,7 +54,20 @@
 #define VH_DEFAULT_SIZE  32768     /* default virtual (bin) heap min size (words) */
 #define H_DEFAULT_MAX_SIZE 0       /* default max heap size is off */
 
-#define CP_SIZE 1
+typedef enum {
+    /* Return address */
+    ERTS_FRAME_LAYOUT_RA,
+    /* Return address, frame pointer */
+    ERTS_FRAME_LAYOUT_RA_FP,
+    /* Frame pointer, return address */
+    ERTS_FRAME_LAYOUT_FP_RA
+} ErtsFrameLayout;
+
+ERTS_GLB_INLINE const int erts_cp_size(void);
+
+/* FIXME: this should no longer be a macro, but we've kept it as-is to keep the
+ * diff as small as possible during the FP experiment. */
+#define CP_SIZE erts_cp_size()
 
 /* In the JIT we're not guaranteed to have allocated a word for the CP when
  * allocating a stack frame (it's still reserved however), as the `call` and
@@ -73,6 +86,12 @@
  * To get around this, we maintain a minimum amount (S_RESERVED) of free space
  * on the stack that can be freely used by the JIT or interpreter for whatever
  * purpose. */
+
+#if defined(HAVE_LINUX_PERF_SUPPORT) && defined(BEAMASM)
+extern ErtsFrameLayout ERTS_WRITE_UNLIKELY(erts_frame_layout);
+#else /* !defined(HAVE_LINUX_PERF_SUPPORT) || !defined(BEAMASM) */ 
+static const ErtsFrameLayout erts_frame_layout = ERTS_FRAME_LAYOUT_RA;
+#endif
 
 #if defined(BEAMASM) && defined(NATIVE_ERLANG_STACK)
 #define S_REDZONE (CP_SIZE * 3)
@@ -290,5 +309,22 @@ extern void** beam_ops;
     ((w) == beam_return_trace || (w) == beam_exception_trace)
 
 #endif /* BEAMASM */
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+ERTS_GLB_INLINE const int erts_cp_size()
+{
+    switch (erts_frame_layout) {
+        case ERTS_FRAME_LAYOUT_RA:
+            return 1;
+        case ERTS_FRAME_LAYOUT_FP_RA:
+        case ERTS_FRAME_LAYOUT_RA_FP:
+            return 2;
+        default:
+            break;
+    }
+
+    ERTS_INTERNAL_ERROR(!"unreachable");
+}
+#endif
 
 #endif	/* __ERL_VM_H__ */
