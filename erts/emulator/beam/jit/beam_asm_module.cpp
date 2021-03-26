@@ -388,6 +388,18 @@ void BeamModuleAssembler::emit_label(const ArgVal &Label) {
     a.bind(currLabel);
 }
 
+void BeamModuleAssembler::emit_function_label(const ArgVal &Label) {
+    size_t entry_address = a.offset() + sizeof(ErtsCodeInfo);
+
+    if (entry_address % ERTS_CACHE_LINE_SIZE) {
+        size_t padding =
+                ERTS_CACHE_LINE_SIZE - entry_address % ERTS_CACHE_LINE_SIZE;
+        embed_zeros(padding);
+    }
+
+    emit_label(Label);
+}
+
 void BeamModuleAssembler::emit_aligned_label(const ArgVal &Label,
                                              const ArgVal &Alignment) {
     ASSERT(Alignment.getType() == ArgVal::u);
