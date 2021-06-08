@@ -812,6 +812,8 @@ call(#c_call{args=As0}=Call0, #c_literal{val=M}=M0, #c_literal{val=N}=N0, Sub) -
     case simplify_call(Call0, M, N, As1) of
         #c_literal{}=Lit ->
             Lit;
+        #c_case{}=Case ->
+            Case;
         #c_call{args=As}=Call ->
             case get(no_inline_list_funcs) of
                 true ->
@@ -837,6 +839,37 @@ simplify_call(_Call, maps, new, []) ->
     #c_literal{val=#{}};
 simplify_call(Call, maps, size, [Map]) ->
     rewrite_call(Call, erlang, map_size, [Map]);
+simplify_call(Call, maps, get, [Key, Map, Default]) ->
+    CgAnno = [compiler_generated],
+
+    BadMap = make_var(CgAnno),
+    Raise = #c_primop{anno=cerl:get_ann(Call),
+                      name=#c_literal{val=match_fail},
+                      args=[cerl:c_tuple([#c_literal{val=badmap},BadMap])]},
+
+    Matched = make_var(CgAnno),
+    #c_case{arg=Map,clauses=[
+        #c_clause{anno=CgAnno,
+                  pats=[#c_map{anno=CgAnno,
+                               arg=#c_literal{val=#{}},
+                               es=[#c_map_pair{op=#c_literal{val=exact},
+                                               key=Key,
+                                               val=Matched}],
+                               is_pat=true}],
+                  guard=#c_literal{val=true},
+                  body=Matched},
+        #c_clause{anno=CgAnno,
+                  pats=[#c_map{anno=CgAnno,
+                               arg=#c_literal{val=#{}},
+                               es=[],
+                               is_pat=true}],
+                  guard=#c_literal{val=true},
+                  body=Default},
+        #c_clause{anno=CgAnno,
+                  pats=[BadMap],
+                  guard=#c_literal{val=true},
+                  body=Raise}
+    ]};
 simplify_call(Call, _, _, Args) ->
     Call#c_call{args=Args}.
 
