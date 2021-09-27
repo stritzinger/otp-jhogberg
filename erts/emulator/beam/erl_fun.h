@@ -50,6 +50,11 @@ typedef struct erl_fun_entry {
  * of the environment.
  */
 
+/* WIP: Remove HEADER_EXPORT and use this structure for both export and local
+ * funs? We very rarely need to know the difference, and could perhaps signal
+ * it with `next == NULL` or something. This would greatly simplify fun-related
+ * instructions. */
+
 typedef struct erl_fun_thing {
     Eterm thing_word;		/* Subtag FUN_SUBTAG. */
     ErlFunEntry* fe;		/* Pointer to fun entry. */
