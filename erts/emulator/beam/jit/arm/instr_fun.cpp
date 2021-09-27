@@ -163,9 +163,6 @@ void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgVal &Index,
     lambda.trampoline = a.newLabel();
     a.bind(lambda.trampoline);
 
-    a.cmp(ARG3, imm(fun_arity));
-    a.cond_ne().b(error);
-
     if (NumFree.getValue() == 1) {
         auto first = init_destination(ArgVal(ArgVal::XReg, fun_arity), TMP1);
 
@@ -196,12 +193,6 @@ void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgVal &Index,
     }
 
     a.b(resolve_beam_label(Lbl, disp128MB));
-
-    a.bind(error);
-    {
-        emit_enter_erlang_frame();
-        a.b(resolve_fragment(ga->get_handle_call_fun_error(), disp128MB));
-    }
 }
 
 void BeamModuleAssembler::emit_i_make_fun3(const ArgVal &Fun,
@@ -364,10 +355,6 @@ arm::Gp BeamModuleAssembler::emit_call_fun() {
     a.cond_eq().b(exported);
     a.cmp(TMP1, imm(HEADER_FUN));
     a.cond_ne().b(next);
-
-    a.ldur(TMP1, emit_boxed_val(fun_thing, offsetof(ErlFunThing, fe)));
-    a.ldr(TMP1, arm::Mem(TMP1, offsetof(ErlFunEntry, export_entry.addresses)));
-    a.b(next);
 
     a.bind(exported);
     {

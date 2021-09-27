@@ -120,6 +120,13 @@ erts_put_fun_entry2(Eterm mod, int old_uniq, int old_index,
     template.entry.index = index;
     template.entry.module = mod;
     template.entry.arity = arity;
+
+     /* HACK HACK HACK: we'll want to fill in the correct function atom later
+      * on. */
+    template.entry.export_entry.info.mfa.module = mod;
+    template.entry.export_entry.info.mfa.function = am_abandoned;
+    template.entry.export_entry.info.mfa.arity = arity;
+
     sys_memcpy(template.entry.uniq, uniq, sizeof(template.entry.uniq));
 
     erts_fun_write_lock();

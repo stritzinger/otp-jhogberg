@@ -172,9 +172,6 @@ void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgVal &Index,
     lambda.trampoline = a.newLabel();
     a.bind(lambda.trampoline);
 
-    a.cmp(ARG3, imm(effective_arity));
-    a.short_().jne(error);
-
     emit_ptr_val(ARG4, ARG4);
 
     for (i = 0; i < num_free - 1; i += 2) {
@@ -192,9 +189,6 @@ void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgVal &Index,
     }
 
     a.jmp(labels[Lbl.getValue()]);
-
-    a.bind(error);
-    abs_jmp(ga->get_handle_call_fun_error());
 }
 
 void BeamModuleAssembler::emit_i_make_fun3(const ArgVal &Fun,
@@ -346,11 +340,6 @@ x86::Gp BeamModuleAssembler::emit_call_fun() {
     a.short_().je(exported);
     a.cmp(emit_boxed_val(fun_thing), imm(HEADER_FUN));
     a.short_().jne(next);
-
-    a.mov(ARG1, emit_boxed_val(fun_thing, offsetof(ErlFunThing, fe)));
-    a.mov(ARG1, x86::qword_ptr(ARG1,
-                               offsetof(ErlFunEntry, export_entry.addresses)));
-    a.short_().jmp(next);
 
     a.bind(exported);
     {
