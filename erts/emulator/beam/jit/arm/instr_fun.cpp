@@ -366,7 +366,7 @@ arm::Gp BeamModuleAssembler::emit_call_fun() {
     a.cond_ne().b(next);
 
     a.ldur(TMP1, emit_boxed_val(fun_thing, offsetof(ErlFunThing, fe)));
-    a.ldr(TMP1, arm::Mem(TMP1, offsetof(ErlFunEntry, address)));
+    a.ldr(TMP1, arm::Mem(TMP1, offsetof(ErlFunEntry, export_entry.addresses)));
     a.b(next);
 
     a.bind(exported);

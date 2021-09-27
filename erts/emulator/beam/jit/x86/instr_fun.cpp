@@ -348,7 +348,8 @@ x86::Gp BeamModuleAssembler::emit_call_fun() {
     a.short_().jne(next);
 
     a.mov(ARG1, emit_boxed_val(fun_thing, offsetof(ErlFunThing, fe)));
-    a.mov(ARG1, x86::qword_ptr(ARG1, offsetof(ErlFunEntry, address)));
+    a.mov(ARG1, x86::qword_ptr(ARG1,
+                               offsetof(ErlFunEntry, export_entry.addresses)));
     a.short_().jmp(next);
 
     a.bind(exported);

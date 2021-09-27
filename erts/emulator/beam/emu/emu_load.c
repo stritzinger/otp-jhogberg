@@ -632,7 +632,14 @@ void beam_load_finalize_code(LoaderState* stp, struct erl_module_instance* inst_
                 erts_refc_dectest(&fun_entry->refc, 1);
             }
 
-            fun_entry->address = stp->codev + stp->labels[lambda->label].value;
+            {
+                int v;
+
+                for (v = 0; v < ERTS_ADDRESSV_SIZE; v++) {
+                    fun_entry->export_entry.addresses[v] =
+                        stp->codev + stp->labels[lambda->label].value;
+                }
+            }
         }
 
         lp = stp->lambda_patches;

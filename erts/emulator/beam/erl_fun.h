@@ -27,9 +27,8 @@
  * Fun entry.
  */
 typedef struct erl_fun_entry {
-    HashBucket bucket;
-
-    ErtsCodePtr address;            /* Pointer to code for actual function */
+    Export export_entry;            /* Export entry containing pointers to code
+                                     * for actual function */
 
     /* These fields identify the function and must not be altered after fun
      * creation. */

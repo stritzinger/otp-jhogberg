@@ -1722,7 +1722,7 @@ call_fun(Process* p,    /* Current process. */
     if (is_fun_header(hdr)) {
 	ErlFunThing* funp = (ErlFunThing *) fun_val(fun);
 	ErlFunEntry* fe = funp->fe;
-	ErtsCodePtr code_ptr = fe->address;
+	ErtsCodePtr code_ptr = fe->export_entry.addresses[0];
 	Eterm* var_ptr;
 	unsigned num_free = funp->num_free;
         const ErtsCodeMFA *mfa = erts_code_to_codemfa(code_ptr);
