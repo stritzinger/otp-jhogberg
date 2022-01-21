@@ -398,30 +398,34 @@ is_safe_label_block([]) -> true.
 %%  Figure out the layout of the stack frame.
 
 frame_layout(Is, Kills, U, #st{safe=Safe}) ->
-    Killed = ordsets:from_list([Y || {kill,Y} <- Kills]),
-    case ordsets:is_subset(Killed, U) of
-        true ->
-            throw(not_possible);
-        false ->
-            N = frame_size(Is, Safe),
-            IsKilled = fun(R) -> not lists:member(R, U) end,
-            {N,frame_layout_1(Kills, 0, N, IsKilled, [])}
-    end.
+    N = frame_size(Is, Safe),
 
-frame_layout_1([{kill,{y,Y}}=I|Ks], Y, N, IsKilled, Acc) ->
-    frame_layout_1(Ks, Y+1, N, IsKilled, [I|Acc]);
-frame_layout_1(Ks, Y, N, IsKilled, Acc) when Y < N ->
-    R = {y,Y},
-    I = case IsKilled(R) of
-	    false -> {live,R};
-	    true -> {dead,R}
-	end,
-    frame_layout_1(Ks, Y+1, N, IsKilled, [I|Acc]);
-frame_layout_1([], Y, Y, _, Acc) ->
-    frame_layout_2(Acc).
+    Regs = frame_layout_1(Kills, 0, N),
 
-frame_layout_2([{live,_}|Is]) -> frame_layout_2(Is);
-frame_layout_2(Is) -> reverse(Is).
+    Dead = ordsets:subtract(Regs, U),
+    Live = ordsets:subtract(U, Dead),
+    Layout = frame_layout_2(Kills, Dead, Live, 0),
+
+    {N, Layout}.
+
+%% Returns a list of all non-killed registers in the stack frame.
+frame_layout_1([{kill,{y,Y}} | Ks], Y, N) ->
+    frame_layout_1(Ks, Y + 1, N);
+frame_layout_1(Ks, Y, N) when Y < N ->
+    [{y,Y} | frame_layout_1(Ks, Y + 1, N)];
+frame_layout_1([], Y, Y) ->
+    [].
+
+%% Adds 'live' and 'dead' annotations for all registers in the frame, keeping
+%% 'kill' annotations and ignoring trailing 'live' ones.
+frame_layout_2([], [], _Live, _Y) ->
+    [];
+frame_layout_2([{kill,{y,Y}}=I | Ks], Dead, Live, Y) ->
+    [I | frame_layout_2(Ks, Dead, Live, Y + 1)];
+frame_layout_2(Ks, [{y,Y}=R | Dead], Live, Y) ->
+    [{dead, R} | frame_layout_2(Ks, Dead, Live, Y + 1)];
+frame_layout_2(Ks, Dead, [{y,Y}=R | Live], Y) ->
+    [{live, R} | frame_layout_2(Ks, Dead, Live, Y + 1)].
 
 %% frame_size([Instruction], SafeLabels) -> FrameSize
 %%  Find out the frame size by looking at the code that follows.
@@ -588,7 +592,7 @@ yregs(Rs) ->
 
 yregs_1([{y,_}=Y|Rs]) ->
     [Y|yregs_1(Rs)];
-yregs_1([{tr,{y,_}=Y,_}|Rs]) ->
+yregs_1([#tr{r={y,_}=Y}|Rs]) ->
     [Y|yregs_1(Rs)];
 yregs_1([_|Rs]) ->
     yregs_1(Rs);
