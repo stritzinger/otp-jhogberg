@@ -39,7 +39,8 @@ module({Mod,Exp,Attr,Fs0,Lc}, _Opts) ->
 function({function,Name,Arity,CLabel,Is0}) ->
     try
         St = #st{safe=safe_labels(Is0, [])},
-        Is = trim(Is0, St, []),
+        Usage = none,
+        Is = trim(Is0, Usage, St, []),
         {function,Name,Arity,CLabel,Is}
     catch
         Class:Error:Stack ->
@@ -47,7 +48,14 @@ function({function,Name,Arity,CLabel,Is0}) ->
 	    erlang:raise(Class, Error, Stack)
     end.
 
-trim([{init_yregs,{list,Kills0}}=I|Is0], St, Acc) ->
+trim([{init_yregs,_}=I|Is], none, St, Acc) ->
+    case usage(Is) of
+        none ->
+            trim(Is, none, St, [I|Acc]);
+        Us ->
+            trim([I|Is], Us, St, Acc)
+    end;
+trim([{init_yregs,{list,Kills0}}=I|Is0], [U|Us], St, Acc) ->
     Kills = [{kill,Y} || Y <- Kills0],
     try
         %% Find out the size and layout of the stack frame.
@@ -57,7 +65,7 @@ trim([{init_yregs,{list,Kills0}}=I|Is0], St, Acc) ->
         %%
         %% That means that y0 and y3 are to be killed, that y1
         %% has been killed previously, and that y2 is live.
-        {FrameSize,Layout} = frame_layout(Is0, Kills, St),
+        {FrameSize,Layout} = frame_layout(Is0, Kills, U, St),
 
         %% Calculate all recipes that are not worse in terms
         %% of estimated execution time. The recipes are ordered
@@ -73,16 +81,20 @@ trim([{init_yregs,{list,Kills0}}=I|Is0], St, Acc) ->
     of
 	{Is,TrimInstr} ->
             %% One of the recipes was applied.
-	    trim(Is, St, reverse(TrimInstr)++Acc)
+	    trim(Is, none, St, reverse(TrimInstr)++Acc)
     catch
 	not_possible ->
             %% No recipe worked out. Use the original init_yregs/1
             %% instruction.
-	    trim(Is0, St, [I|Acc])
+	    trim(Is0, Us, St, [I|Acc])
     end;
-trim([I|Is], St, Acc) ->
-    trim(Is, St, [I|Acc]);
-trim([], _, Acc) ->
+trim([I|Is], [_|Us], St, Acc) ->
+    trim(Is, Us, St, [I|Acc]);
+trim([I|Is], none, St, Acc) ->
+    trim(Is, none, St, [I|Acc]);
+trim([I|Is], [], St, Acc) ->
+    trim(Is, none, St, [I|Acc]);
+trim([], _, _, Acc) ->
     reverse(Acc).
 
 %% is_not_recursive([Instruction]) -> true|false.
@@ -385,10 +397,16 @@ is_safe_label_block([]) -> true.
 %%      [{kill,Reg} | {live,Reg} | {dead,Reg}]
 %%  Figure out the layout of the stack frame.
 
-frame_layout(Is, Kills, #st{safe=Safe}) ->
-    N = frame_size(Is, Safe),
-    IsKilled = fun(R) -> is_not_used(R, Is) end,
-    {N,frame_layout_1(Kills, 0, N, IsKilled, [])}.
+frame_layout(Is, Kills, U, #st{safe=Safe}) ->
+    Killed = ordsets:from_list([Y || {kill,Y} <- Kills]),
+    case ordsets:is_subset(Killed, U) of
+        true ->
+            throw(not_possible);
+        false ->
+            N = frame_size(Is, Safe),
+            IsKilled = fun(R) -> not lists:member(R, U) end,
+            {N,frame_layout_1(Kills, 0, N, IsKilled, [])}
+    end.
 
 frame_layout_1([{kill,{y,Y}}=I|Ks], Y, N, IsKilled, Acc) ->
     frame_layout_1(Ks, Y+1, N, IsKilled, [I|Acc]);
@@ -470,6 +488,112 @@ frame_size_branch(L, Is, Safe) ->
 	true -> frame_size(Is, Safe)
     end.
 
+usage(Is) ->
+    usage(Is, []).
+
+usage([{label,_}|_], Acc) ->
+    do_usage(Acc);
+usage([I|Is], Acc) ->
+    usage(Is, [I|Acc]);
+usage([], Acc) ->
+    do_usage(Acc).
+
+do_usage(Is0) ->
+    case Is0 of
+        [return,{deallocate,_N}|Is] ->
+            %% Regs = [{y,R} || R <- lists:seq(0, N-1)],
+            Regs = [],
+            do_usage(Is, Regs, []);
+        _ ->
+            none
+    end.
+
+do_usage([{'%',_}|Is], Regs, Acc) ->
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{apply,_}|Is], Regs, Acc) ->
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{block,Blk}|Is], Regs0, Acc) ->
+    Regs = do_usage_blk(Blk, Regs0),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{bs_get_tail,Src,Dst,_}|Is], Regs0, Acc) ->
+    Regs1 = ordsets:union(Regs0, yregs([Src])),
+    Regs = ordsets:del_element(Dst, Regs1),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{bs_set_position,Src1,Src2}|Is], Regs0, Acc) ->
+    Regs = ordsets:union(Regs0, yregs([Src1,Src2])),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{bs_start_match4,_Fail,_Live,Src,Dst}|Is], Regs0, Acc) ->
+    Regs = ordsets:union(Regs0, yregs([Src,Dst])),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{call,_,_}|Is], Regs, Acc) ->
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{call_ext,_,_}|Is], Regs, Acc) ->
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{call_fun,_}|Is], Regs, Acc) ->
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{bif,_,{f,_},Ss,Dst}|Is], Regs0, Acc) ->
+    Regs1 = ordsets:union(Regs0, yregs(Ss)),
+    Regs = ordsets:del_element(Dst, Regs1),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{gc_bif,_,{f,_},_,Ss,Dst}|Is], Regs0, Acc) ->
+    Regs1 = ordsets:union(Regs0, yregs(Ss)),
+    Regs = ordsets:del_element(Dst, Regs1),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{get_map_elements,{f,_},S,{list,List}}|Is], Regs0, Acc) ->
+    {Ss,Ds} = beam_utils:split_even(List),
+    Regs1 = ordsets:union(Regs0, yregs([S|Ss])),
+    Regs = ordsets:subtract(Regs1, yregs(Ds)),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{init_yregs,{list,Ds}}|Is], Regs0, Acc) ->
+    Regs = ordsets:subtract(Regs0, Ds),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{make_fun3,_,_,_,Dst,{list,Ss}}|Is], Regs0, Acc) ->
+    Regs1 = ordsets:union(Regs0, yregs(Ss)),
+    Regs = ordsets:del_element(Dst, Regs1),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{line,_}|Is], Regs, Acc) ->
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{recv_marker_clear,Src}|Is], Regs0, Acc) ->
+    Regs = ordsets:union(Regs0, yregs([Src])),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{recv_marker_reserve,Src}|Is], Regs0, Acc) ->
+    Regs = ordsets:union(Regs0, yregs([Src])),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{swap,R1,R2}|Is], Regs0, Acc) ->
+    Regs = ordsets:union(Regs0, yregs([R1,R2])),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{test,_,{f,_},Ss}|Is], Regs0, Acc) ->
+    Regs = ordsets:union(Regs0, yregs(Ss)),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{test,_,{f,_},_,Ss,Dst}|Is], Regs0, Acc) ->
+    Regs1 = ordsets:union(Regs0, yregs(Ss)),
+    Regs = ordsets:del_element(Dst, Regs1),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([_I|_], _, _) ->
+    %% io:format("~p\n", [I]),
+    none;
+do_usage([], _Regs, Acc) ->
+    Acc;
+do_usage(_, _, _) ->
+    none.
+
+do_usage_blk([{set,Ds,Ss,_}|Is], Regs0) ->
+    Regs1 = do_usage_blk(Is, Regs0),
+    Regs = ordsets:union(Regs1, yregs(Ss)),
+    ordsets:subtract(Regs, ordsets:from_list(Ds));
+do_usage_blk([], Regs) -> Regs.
+
+yregs(Rs) ->
+    ordsets:from_list(yregs_1(Rs)).
+
+yregs_1([{y,_}=Y|Rs]) ->
+    [Y|yregs_1(Rs)];
+yregs_1([{tr,{y,_}=Y,_}|Rs]) ->
+    [Y|yregs_1(Rs)];
+yregs_1([_|Rs]) ->
+    yregs_1(Rs);
+yregs_1([]) -> [].
+
 %% is_not_used(Y, [Instruction]) -> true|false.
 %%  Test whether the value of Y is unused in the instruction sequence.
 %%  Return true if the value of Y is not used, and false if it is used.
@@ -477,85 +601,85 @@ frame_size_branch(L, Is, Safe) ->
 %%  This function handles the same instructions as frame_size/2. It
 %%  assumes that any labels in the instructions are safe labels.
 
-is_not_used(Y, [{'%',_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(Y, [{apply,_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(Y, [{bif,_,{f,_},Ss,Dst}|Is]) ->
-    is_not_used_ss_dst(Y, Ss, Dst, Is);
-is_not_used(Y, [{block,Bl}|Is]) ->
-    case is_not_used_block(Y, Bl) of
-        used -> false;
-        killed -> true;
-        transparent -> is_not_used(Y, Is)
-    end;
-is_not_used(Y, [{bs_get_tail,Src,Dst,_}|Is]) ->
-    is_not_used_ss_dst(Y, [Src], Dst, Is);
-is_not_used(Y, [{bs_start_match4,_Fail,_Live,Src,Dst}|Is]) ->
-    Y =/= Src andalso Y =/= Dst andalso
-        is_not_used(Y, Is);
-is_not_used(Y, [{bs_set_position,Src1,Src2}|Is]) ->
-    Y =/= Src1 andalso Y =/= Src2 andalso
-        is_not_used(Y, Is);
-is_not_used(Y, [{call,_,_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(Y, [{call_ext,_,_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(Y, [{call_fun,_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(_Y, [{deallocate,_}|_]) ->
-    true;
-is_not_used(Y, [{gc_bif,_,{f,_},_Live,Ss,Dst}|Is]) ->
-    is_not_used_ss_dst(Y, Ss, Dst, Is);
-is_not_used(Y, [{get_map_elements,{f,_},S,{list,List}}|Is]) ->
-    {Ss,Ds} = beam_utils:split_even(List),
-    case is_y_member(Y, [S|Ss]) of
-	true ->
-	    false;
-	false ->
-            is_y_member(Y, Ds) orelse is_not_used(Y, Is)
-    end;
-is_not_used(Y, [{init_yregs,{list,Yregs}}|Is]) ->
-    is_y_member(Y, Yregs) orelse is_not_used(Y, Is);
-is_not_used(Y, [{line,_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(Y, [{make_fun2,_,_,_,_}|Is]) ->
-    is_not_used(Y, Is);
-is_not_used(Y, [{make_fun3,_,_,_,Dst,{list,Env}}|Is]) ->
-    is_not_used_ss_dst(Y, Env, Dst, Is);
-is_not_used(Y, [{recv_marker_clear,Ref}|Is]) ->
-    Y =/= Ref andalso is_not_used(Y, Is);
-is_not_used(Y, [{recv_marker_reserve,Dst}|Is]) ->
-    Y =/= Dst andalso is_not_used(Y, Is);
-is_not_used(Y, [{swap,Reg1,Reg2}|Is]) ->
-    Y =/= Reg1 andalso Y =/= Reg2 andalso is_not_used(Y, Is);
-is_not_used(Y, [{test,_,_,Ss}|Is]) ->
-    not is_y_member(Y, Ss) andalso is_not_used(Y, Is);
-is_not_used(Y, [{test,_Op,{f,_},_Live,Ss,Dst}|Is]) ->
-    is_not_used_ss_dst(Y, Ss, Dst, Is).
+%% is_not_used(Y, [{'%',_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(Y, [{apply,_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(Y, [{bif,_,{f,_},Ss,Dst}|Is]) ->
+%%     is_not_used_ss_dst(Y, Ss, Dst, Is);
+%% is_not_used(Y, [{block,Bl}|Is]) ->
+%%     case is_not_used_block(Y, Bl) of
+%%         used -> false;
+%%         killed -> true;
+%%         transparent -> is_not_used(Y, Is)
+%%     end;
+%% is_not_used(Y, [{bs_get_tail,Src,Dst,_}|Is]) ->
+%%     is_not_used_ss_dst(Y, [Src], Dst, Is);
+%% is_not_used(Y, [{bs_start_match4,_Fail,_Live,Src,Dst}|Is]) ->
+%%     Y =/= Src andalso Y =/= Dst andalso
+%%         is_not_used(Y, Is);
+%% is_not_used(Y, [{bs_set_position,Src1,Src2}|Is]) ->
+%%     Y =/= Src1 andalso Y =/= Src2 andalso
+%%         is_not_used(Y, Is);
+%% is_not_used(Y, [{call,_,_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(Y, [{call_ext,_,_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(Y, [{call_fun,_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(_Y, [{deallocate,_}|_]) ->
+%%     true;
+%% is_not_used(Y, [{gc_bif,_,{f,_},_Live,Ss,Dst}|Is]) ->
+%%     is_not_used_ss_dst(Y, Ss, Dst, Is);
+%% is_not_used(Y, [{get_map_elements,{f,_},S,{list,List}}|Is]) ->
+%%     {Ss,Ds} = beam_utils:split_even(List),
+%%     case is_y_member(Y, [S|Ss]) of
+%% 	true ->
+%% 	    false;
+%% 	false ->
+%%             is_y_member(Y, Ds) orelse is_not_used(Y, Is)
+%%     end;
+%% is_not_used(Y, [{init_yregs,{list,Yregs}}|Is]) ->
+%%     is_y_member(Y, Yregs) orelse is_not_used(Y, Is);
+%% is_not_used(Y, [{line,_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(Y, [{make_fun2,_,_,_,_}|Is]) ->
+%%     is_not_used(Y, Is);
+%% is_not_used(Y, [{make_fun3,_,_,_,Dst,{list,Env}}|Is]) ->
+%%     is_not_used_ss_dst(Y, Env, Dst, Is);
+%% is_not_used(Y, [{recv_marker_clear,Ref}|Is]) ->
+%%     Y =/= Ref andalso is_not_used(Y, Is);
+%% is_not_used(Y, [{recv_marker_reserve,Dst}|Is]) ->
+%%     Y =/= Dst andalso is_not_used(Y, Is);
+%% is_not_used(Y, [{swap,Reg1,Reg2}|Is]) ->
+%%     Y =/= Reg1 andalso Y =/= Reg2 andalso is_not_used(Y, Is);
+%% is_not_used(Y, [{test,_,_,Ss}|Is]) ->
+%%     not is_y_member(Y, Ss) andalso is_not_used(Y, Is);
+%% is_not_used(Y, [{test,_Op,{f,_},_Live,Ss,Dst}|Is]) ->
+%%     is_not_used_ss_dst(Y, Ss, Dst, Is).
 
-is_not_used_block(Y, [{set,Ds,Ss,_}|Is]) ->
-    case is_y_member(Y, Ss) of
-        true ->
-            used;
-        false ->
-            case is_y_member(Y, Ds) of
-                true ->
-                    killed;
-                false ->
-                    is_not_used_block(Y, Is)
-            end
-    end;
-is_not_used_block(_Y, []) -> transparent.
+%% is_not_used_block(Y, [{set,Ds,Ss,_}|Is]) ->
+%%     case is_y_member(Y, Ss) of
+%%         true ->
+%%             used;
+%%         false ->
+%%             case is_y_member(Y, Ds) of
+%%                 true ->
+%%                     killed;
+%%                 false ->
+%%                     is_not_used_block(Y, Is)
+%%             end
+%%     end;
+%% is_not_used_block(_Y, []) -> transparent.
 
-is_not_used_ss_dst(Y, Ss, Dst, Is) ->
-    not is_y_member(Y, Ss) andalso (Y =:= Dst orelse is_not_used(Y, Is)).
+%% is_not_used_ss_dst(Y, Ss, Dst, Is) ->
+%%     not is_y_member(Y, Ss) andalso (Y =:= Dst orelse is_not_used(Y, Is)).
 
-is_y_member({y,N0}, Ss) ->
-    any(fun(#tr{r={y,N}}) ->
-                N =:= N0;
-           ({y,N}) ->
-                N =:= N0;
-           (_) ->
-                false
-        end, Ss).
+%% is_y_member({y,N0}, Ss) ->
+%%     any(fun(#tr{r={y,N}}) ->
+%%                 N =:= N0;
+%%            ({y,N}) ->
+%%                 N =:= N0;
+%%            (_) ->
+%%                 false
+%%         end, Ss).
