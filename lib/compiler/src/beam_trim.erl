@@ -1,8 +1,8 @@
 %%
 %% %CopyrightBegin%
-%% 
+%%
 %% Copyright Ericsson AB 2007-2021. All Rights Reserved.
-%% 
+%%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
@@ -14,7 +14,7 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
-%% 
+%%
 %% %CopyrightEnd%
 %%
 
@@ -26,11 +26,11 @@
 -include("beam_asm.hrl").
 
 -record(st,
-	{safe :: sets:set(beam_asm:label()) %Safe labels.
+        {safe :: sets:set(beam_asm:label()) %Safe labels.
         }).
 
 -spec module(beam_utils:module_code(), [compile:option()]) ->
-                    {'ok',beam_utils:module_code()}.
+          {'ok',beam_utils:module_code()}.
 
 module({Mod,Exp,Attr,Fs0,Lc}, _Opts) ->
     Fs = [function(F) || F <- Fs0],
@@ -44,8 +44,8 @@ function({function,Name,Arity,CLabel,Is0}) ->
         {function,Name,Arity,CLabel,Is}
     catch
         Class:Error:Stack ->
-	    io:fwrite("Function: ~w/~w\n", [Name,Arity]),
-	    erlang:raise(Class, Error, Stack)
+            io:fwrite("Function: ~w/~w\n", [Name,Arity]),
+            erlang:raise(Class, Error, Stack)
     end.
 
 trim([{init_yregs,_}=I|Is], none, St, Acc) ->
@@ -228,8 +228,8 @@ is_too_expensive_fun(false) ->
 %%  of the recipes were possible to apply.
 
 try_remap([R|Rs], Is0, FrameSize) ->
-    {TrimInstr, Map} = expand_recipe(R, FrameSize),
-    try remap(Is0, Map) of
+    {TrimInstr, Moved, Trim} = expand_recipe(R, FrameSize),
+    try remap(Is0, Moved, Trim) of
         Is -> {Is, TrimInstr}
     catch
         throw:not_possible ->
@@ -240,135 +240,115 @@ try_remap([], _, _) ->
 
 expand_recipe({Layout,Trim,Moves}, FrameSize) ->
     Is = reverse(Moves, [{trim,Trim,FrameSize-Trim}]),
-    Map = create_map(Trim, Moves),
+    Moved = maps:from_list([{Src,Dst-Trim} || {move,{y,Src},{y,Dst}} <- Moves]),
     case [Y || {kill,Y} <- Layout] of
         [] ->
-            {Is,Map};
+            {Is, Moved, Trim};
         [_|_]=Yregs ->
-            {[{init_yregs,{list,Yregs}}|Is],Map}
+            {[{init_yregs,{list,Yregs}}|Is], Moved, Trim}
     end.
 
-create_map(Trim, []) ->
-    fun({y,Y}) when Y < Trim ->
-            error(internal_error);
-       ({y,Y}) ->
-            {y,Y-Trim};
-       (#tr{r={y,Y}}) when Y < Trim ->
-            error(internal_error);
-       (#tr{r={y,Y},t=Type}) ->
-            #tr{r={y,Y-Trim},t=Type};
-       ({frame_size,N}) ->
-            N - Trim;
-       (Any) ->
-            Any
-    end;
-create_map(Trim, Moves) ->
-    Map0 = [{Src,Dst-Trim} || {move,{y,Src},{y,Dst}} <- Moves],
-    Map = maps:from_list(Map0),
-    IllegalTargets = sets:from_list([Dst || {move,_,{y,Dst}} <- Moves], [{version, 2}]),
-    fun({y,Y0}) when Y0 < Trim ->
-            case Map of
-                #{Y0:=Y} -> {y,Y};
-                #{} -> error(internal_error)
-            end;
-       ({y,Y}) ->
-            case sets:is_element(Y, IllegalTargets) of
-                true -> error(internal_error);
-                false -> {y,Y-Trim}
-            end;
-       (#tr{r={y,Y0},t=Type}) when Y0 < Trim ->
-            case Map of
-                #{Y0:=Y} -> #tr{r={y,Y},t=Type};
-                #{} -> error(internal_error)
-            end;
-       (#tr{r={y,Y},t=Type}) ->
-            case sets:is_element(Y, IllegalTargets) of
-                true -> error(internal_error);
-                false -> #tr{r={y,Y-Trim},t=Type}
-            end;
-       ({frame_size,N}) ->
-            N - Trim;
-       (Any) ->
-            Any
-    end.
-
-remap([{'%',Comment}=I|Is], Map) ->
+remap([{'%',Comment}=I|Is], Moved, Trim) ->
     case Comment of
-        {var_info,Var,Type} ->
-            [{'%',{var_info,Map(Var),Type}} | remap(Is, Map)];
+        {var_info,Var0,Type} ->
+            Var = remap_arg(Var0, Moved, Trim),
+            [{'%',{var_info, Var, Type}} | remap(Is, Moved, Trim)];
         _ ->
-            [I | remap(Is, Map)]
+            [I | remap(Is, Moved, Trim)]
     end;
-remap([{apply,_}=I|Is], Map) ->
-    [I | remap(Is, Map)];
-remap([{bif,Name,Fail,Ss,D}|Is], Map) ->
-    I = {bif,Name,Fail,[Map(S) || S <- Ss],Map(D)},
-    [I | remap(Is, Map)];
-remap([{block,Bl0}|Is], Map) ->
-    Bl = remap_block(Bl0, Map),
-    [{block,Bl} | remap(Is, Map)];
-remap([{bs_get_tail,Src,Dst,Live}|Is], Map) ->
-    I = {bs_get_tail,Map(Src),Map(Dst),Live},
-    [I | remap(Is, Map)];
-remap([{bs_start_match4,Fail,Live,Src,Dst}|Is], Map) ->
-    I = {bs_start_match4,Fail,Live,Map(Src),Map(Dst)},
-    [I | remap(Is, Map)];
-remap([{bs_set_position,Src1,Src2}|Is], Map) ->
-    I = {bs_set_position,Map(Src1),Map(Src2)},
-    [I | remap(Is, Map)];
-remap([{call_fun,_}=I|Is], Map) ->
-    [I | remap(Is, Map)];
-remap([{call,_,_}=I|Is], Map) ->
-    [I | remap(Is, Map)];
-remap([{call_ext,_,_}=I|Is], Map) ->
-    [I | remap(Is, Map)];
-remap([{deallocate,N}|Is], Map) ->
-    I = {deallocate,Map({frame_size,N})},
-    [I | remap(Is, Map)];
-remap([{gc_bif,Name,Fail,Live,Ss,D}|Is], Map) ->
-    I = {gc_bif,Name,Fail,Live,[Map(S) || S <- Ss],Map(D)},
-    [I | remap(Is, Map)];
-remap([{get_map_elements,Fail,M,{list,L0}}|Is], Map) ->
-    L = [Map(E) || E <- L0],
-    I = {get_map_elements,Fail,Map(M),{list,L}},
-    [I | remap(Is, Map)];
-remap([{init_yregs,{list,Yregs0}}|Is], Map) ->
-    Yregs = sort([Map(Y) || Y <- Yregs0]),
+remap([{apply,_}=I|Is], Moved, Trim) ->
+    [I | remap(Is, Moved, Trim)];
+remap([{bif,Name,Fail,Ss,D}|Is], Moved, Trim) ->
+    I = {bif,Name,Fail,
+         [remap_arg(S, Moved, Trim) || S <- Ss],
+         remap_arg(D, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{block,Bl0}|Is], Moved, Trim) ->
+    Bl = remap_block(Bl0, Moved, Trim),
+    [{block,Bl} | remap(Is, Moved, Trim)];
+remap([{bs_get_tail,Src,Dst,Live}|Is], Moved, Trim) ->
+    I = {bs_get_tail,
+         remap_arg(Src, Moved, Trim),
+         remap_arg(Dst, Moved, Trim),Live},
+    [I | remap(Is, Moved, Trim)];
+remap([{bs_start_match4,Fail,Live,Src,Dst}|Is], Moved, Trim) ->
+    I = {bs_start_match4,Fail,Live,
+         remap_arg(Src, Moved, Trim),
+         remap_arg(Dst, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{bs_set_position,Src1,Src2}|Is], Moved, Trim) ->
+    I = {bs_set_position,
+         remap_arg(Src1, Moved, Trim),
+         remap_arg(Src2, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{call_fun,_}=I|Is], Moved, Trim) ->
+    [I | remap(Is, Moved, Trim)];
+remap([{call,_,_}=I|Is], Moved, Trim) ->
+    [I | remap(Is, Moved, Trim)];
+remap([{call_ext,_,_}=I|Is], Moved, Trim) ->
+    [I | remap(Is, Moved, Trim)];
+remap([{deallocate,N}|Is], Moved, Trim) ->
+    I = {deallocate, N - Trim},
+    [I | remap(Is, Moved, Trim)];
+remap([{gc_bif,Name,Fail,Live,Ss,D}|Is], Moved, Trim) ->
+    I = {gc_bif,Name,Fail,Live,
+         [remap_arg(S, Moved, Trim) || S <- Ss],
+         remap_arg(D, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{get_map_elements,Fail,M,{list,L0}}|Is], Moved, Trim) ->
+    L = [remap_arg(E, Moved, Trim) || E <- L0],
+    I = {get_map_elements,Fail,remap_arg(M, Moved, Trim),{list,L}},
+    [I | remap(Is, Moved, Trim)];
+remap([{init_yregs,{list,Yregs0}}|Is], Moved, Trim) ->
+    Yregs = sort([remap_arg(Y, Moved, Trim) || Y <- Yregs0]),
     I = {init_yregs,{list,Yregs}},
-    [I | remap(Is, Map)];
-remap([{line,_}=I|Is], Map) ->
-    [I | remap(Is, Map)];
-remap([{make_fun2,_,_,_,_}=I|T], Map) ->
-    [I | remap(T, Map)];
-remap([{make_fun3,F,Index,OldUniq,Dst0,{list,Env0}}|T], Map) ->
-    Env = [Map(E) || E <- Env0],
-    Dst = Map(Dst0),
+    [I | remap(Is, Moved, Trim)];
+remap([{line,_}=I|Is], Moved, Trim) ->
+    [I | remap(Is, Moved, Trim)];
+remap([{make_fun2,_,_,_,_}=I|T], Moved, Trim) ->
+    [I | remap(T, Moved, Trim)];
+remap([{make_fun3,F,Index,OldUniq,Dst0,{list,Env0}}|T], Moved, Trim) ->
+    Env = [remap_arg(E, Moved, Trim) || E <- Env0],
+    Dst = remap_arg(Dst0, Moved, Trim),
     I = {make_fun3,F,Index,OldUniq,Dst,{list,Env}},
-    [I | remap(T, Map)];
-remap([{recv_marker_clear,Ref}|Is], Map) ->
-    I = {recv_marker_clear,Map(Ref)},
-    [I | remap(Is, Map)];
-remap([{recv_marker_reserve,Mark}|Is], Map) ->
-    I = {recv_marker_reserve,Map(Mark)},
-    [I | remap(Is, Map)];
-remap([{swap,Reg1,Reg2}|Is], Map) ->
-    I = {swap,Map(Reg1),Map(Reg2)},
-    [I | remap(Is, Map)];
-remap([{test,Name,Fail,Ss}|Is], Map) ->
-    I = {test,Name,Fail,[Map(S) || S <- Ss]},
-    [I | remap(Is, Map)];
-remap([{test,Name,Fail,Live,Ss,Dst}|Is], Map) ->
-    I = {test,Name,Fail,Live,[Map(S) || S <- Ss],Map(Dst)},
-    [I | remap(Is, Map)];
-remap([return|_]=Is, _Map) ->
+    [I | remap(T, Moved, Trim)];
+remap([{recv_marker_clear,Ref}|Is], Moved, Trim) ->
+    I = {recv_marker_clear,remap_arg(Ref, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{recv_marker_reserve,Mark}|Is], Moved, Trim) ->
+    I = {recv_marker_reserve,remap_arg(Mark, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{swap,Reg1,Reg2}|Is], Moved, Trim) ->
+    I = {swap,remap_arg(Reg1, Moved, Trim),remap_arg(Reg2, Moved, Trim)},
+    [I | remap(Is, Moved, Trim)];
+remap([{test,Name,Fail,Ss}|Is], Moved, Trim) ->
+    I = {test,Name,Fail,[remap_arg(S, Moved, Trim) || S <- Ss]},
+    [I | remap(Is, Moved, Trim)];
+remap([{test,Name,Fail,Live,Ss0,Dst0}|Is], Moved, Trim) ->
+    Ss = [remap_arg(S, Moved, Trim) || S <- Ss0],
+    Dst = remap_arg(Dst0, Moved, Trim),
+    I = {test,Name,Fail,Live,Ss,Dst},
+    [I | remap(Is, Moved, Trim)];
+remap([return|_]=Is, _Moved, _Trim) ->
     Is.
 
-remap_block([{set,Ds0,Ss0,Info}|Is], Map) ->
-    Ds = [Map(D) || D <- Ds0],
-    Ss = [Map(S) || S <- Ss0],
-    [{set,Ds,Ss,Info} | remap_block(Is, Map)];
-remap_block([], _Map) ->
+remap_block([{set,Ds0,Ss0,Info}|Is], Moved, Trim) ->
+    Ds = [remap_arg(D, Moved, Trim) || D <- Ds0],
+    Ss = [remap_arg(S, Moved, Trim) || S <- Ss0],
+    [{set,Ds,Ss,Info} | remap_block(Is, Moved, Trim)];
+remap_block([], _Moved, _Trim) ->
     [].
+
+remap_arg({y,Y}, _Moved, Trim) when Y >= Trim ->
+    {y, Y - Trim};
+remap_arg({y,Y}, Moved, Trim) when Y < Trim ->
+    {y, map_get(Y, Moved)};
+remap_arg(#tr{r={y,Y}}=T, _Moved, Trim) when Y >= Trim ->
+    T#tr{r={y,Y - Trim}};
+remap_arg(#tr{r={y,Y}}=T, Moved, Trim) when Y < Trim ->
+    T#tr{r={y, map_get(Y, Moved)}};
+remap_arg(Any, _Moved, _Trim) ->
+    Any.
 
 %% safe_labels([Instruction], Accumulator) -> gb_set()
 %%  Build a gb_set of safe labels. The code at a safe
@@ -516,8 +496,8 @@ frame_size_branch(0, Is, Safe) ->
     frame_size(Is, Safe);
 frame_size_branch(L, Is, Safe) ->
     case sets:is_element(L, Safe) of
-	false -> throw(not_possible);
-	true -> frame_size(Is, Safe)
+        false -> throw(not_possible);
+        true -> frame_size(Is, Safe)
     end.
 
 usage(Is) ->
