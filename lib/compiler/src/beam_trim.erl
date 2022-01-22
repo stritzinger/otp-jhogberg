@@ -203,15 +203,16 @@ is_too_expensive_fun(false) ->
 %%  This function will issue a `not_possible` exception if none
 %%  of the recipes were possible to apply.
 
-try_remap([R|Rs], Is, FrameSize) ->
-    {TrimInstr,Map} = expand_recipe(R, FrameSize),
-    try
-	{remap(Is, Map, []),TrimInstr}
+try_remap([R|Rs], Is0, FrameSize) ->
+    {TrimInstr, Map} = expand_recipe(R, FrameSize),
+    try remap(Is0, Map) of
+        Is -> {Is, TrimInstr}
     catch
-	throw:not_possible ->
-	    try_remap(Rs, Is, FrameSize)
+        throw:not_possible ->
+            try_remap(Rs, Is0, FrameSize)
     end;
-try_remap([], _, _) -> throw(not_possible).
+try_remap([], _, _) ->
+    throw(not_possible).
 
 expand_recipe({Layout,Trim,Moves}, FrameSize) ->
     Is = reverse(Moves, [{trim,Trim,FrameSize-Trim}]),
@@ -267,82 +268,83 @@ create_map(Trim, Moves) ->
             Any
     end.
 
-remap([{'%',Comment}=I|Is], Map, Acc) ->
+remap([{'%',Comment}=I|Is], Map) ->
     case Comment of
         {var_info,Var,Type} ->
-            remap(Is, Map, [{'%',{var_info,Map(Var),Type}}|Acc]);
+            [{'%',{var_info,Map(Var),Type}} | remap(Is, Map)];
         _ ->
-            remap(Is, Map, [I|Acc])
+            [I | remap(Is, Map)]
     end;
-remap([{block,Bl0}|Is], Map, Acc) ->
-    Bl = remap_block(Bl0, Map, []),
-    remap(Is, Map, [{block,Bl}|Acc]);
-remap([{bs_get_tail,Src,Dst,Live}|Is], Map, Acc) ->
-    I = {bs_get_tail,Map(Src),Map(Dst),Live},
-    remap(Is, Map, [I|Acc]);
-remap([{bs_start_match4,Fail,Live,Src,Dst}|Is], Map, Acc) ->
-    I = {bs_start_match4,Fail,Live,Map(Src),Map(Dst)},
-    remap(Is, Map, [I|Acc]);
-remap([{bs_set_position,Src1,Src2}|Is], Map, Acc) ->
-    I = {bs_set_position,Map(Src1),Map(Src2)},
-    remap(Is, Map, [I|Acc]);
-remap([{call_fun,_}=I|Is], Map, Acc) ->
-    remap(Is, Map, [I|Acc]);
-remap([{call,_,_}=I|Is], Map, Acc) ->
-    remap(Is, Map, [I|Acc]);
-remap([{call_ext,_,_}=I|Is], Map, Acc) ->
-    remap(Is, Map, [I|Acc]);
-remap([{apply,_}=I|Is], Map, Acc) ->
-    remap(Is, Map, [I|Acc]);
-remap([{bif,Name,Fail,Ss,D}|Is], Map, Acc) ->
+remap([{apply,_}=I|Is], Map) ->
+    [I | remap(Is, Map)];
+remap([{bif,Name,Fail,Ss,D}|Is], Map) ->
     I = {bif,Name,Fail,[Map(S) || S <- Ss],Map(D)},
-    remap(Is, Map, [I|Acc]);
-remap([{gc_bif,Name,Fail,Live,Ss,D}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{block,Bl0}|Is], Map) ->
+    Bl = remap_block(Bl0, Map),
+    [{block,Bl} | remap(Is, Map)];
+remap([{bs_get_tail,Src,Dst,Live}|Is], Map) ->
+    I = {bs_get_tail,Map(Src),Map(Dst),Live},
+    [I | remap(Is, Map)];
+remap([{bs_start_match4,Fail,Live,Src,Dst}|Is], Map) ->
+    I = {bs_start_match4,Fail,Live,Map(Src),Map(Dst)},
+    [I | remap(Is, Map)];
+remap([{bs_set_position,Src1,Src2}|Is], Map) ->
+    I = {bs_set_position,Map(Src1),Map(Src2)},
+    [I | remap(Is, Map)];
+remap([{call_fun,_}=I|Is], Map) ->
+    [I | remap(Is, Map)];
+remap([{call,_,_}=I|Is], Map) ->
+    [I | remap(Is, Map)];
+remap([{call_ext,_,_}=I|Is], Map) ->
+    [I | remap(Is, Map)];
+remap([{deallocate,N}|Is], Map) ->
+    I = {deallocate,Map({frame_size,N})},
+    [I | remap(Is, Map)];
+remap([{gc_bif,Name,Fail,Live,Ss,D}|Is], Map) ->
     I = {gc_bif,Name,Fail,Live,[Map(S) || S <- Ss],Map(D)},
-    remap(Is, Map, [I|Acc]);
-remap([{get_map_elements,Fail,M,{list,L0}}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{get_map_elements,Fail,M,{list,L0}}|Is], Map) ->
     L = [Map(E) || E <- L0],
     I = {get_map_elements,Fail,Map(M),{list,L}},
-    remap(Is, Map, [I|Acc]);
-remap([{init_yregs,{list,Yregs0}}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{init_yregs,{list,Yregs0}}|Is], Map) ->
     Yregs = sort([Map(Y) || Y <- Yregs0]),
     I = {init_yregs,{list,Yregs}},
-    remap(Is, Map, [I|Acc]);
-remap([{make_fun2,_,_,_,_}=I|T], Map, Acc) ->
-    remap(T, Map, [I|Acc]);
-remap([{make_fun3,F,Index,OldUniq,Dst0,{list,Env0}}|T], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{line,_}=I|Is], Map) ->
+    [I | remap(Is, Map)];
+remap([{make_fun2,_,_,_,_}=I|T], Map) ->
+    [I | remap(T, Map)];
+remap([{make_fun3,F,Index,OldUniq,Dst0,{list,Env0}}|T], Map) ->
     Env = [Map(E) || E <- Env0],
     Dst = Map(Dst0),
     I = {make_fun3,F,Index,OldUniq,Dst,{list,Env}},
-    remap(T, Map, [I|Acc]);
-remap([{deallocate,N}|Is], Map, Acc) ->
-    I = {deallocate,Map({frame_size,N})},
-    remap(Is, Map, [I|Acc]);
-remap([{recv_marker_clear,Ref}|Is], Map, Acc) ->
+    [I | remap(T, Map)];
+remap([{recv_marker_clear,Ref}|Is], Map) ->
     I = {recv_marker_clear,Map(Ref)},
-    remap(Is, Map, [I|Acc]);
-remap([{recv_marker_reserve,Mark}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{recv_marker_reserve,Mark}|Is], Map) ->
     I = {recv_marker_reserve,Map(Mark)},
-    remap(Is, Map, [I|Acc]);
-remap([{swap,Reg1,Reg2}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{swap,Reg1,Reg2}|Is], Map) ->
     I = {swap,Map(Reg1),Map(Reg2)},
-    remap(Is, Map, [I|Acc]);
-remap([{test,Name,Fail,Ss}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{test,Name,Fail,Ss}|Is], Map) ->
     I = {test,Name,Fail,[Map(S) || S <- Ss]},
-    remap(Is, Map, [I|Acc]);
-remap([{test,Name,Fail,Live,Ss,Dst}|Is], Map, Acc) ->
+    [I | remap(Is, Map)];
+remap([{test,Name,Fail,Live,Ss,Dst}|Is], Map) ->
     I = {test,Name,Fail,Live,[Map(S) || S <- Ss],Map(Dst)},
-    remap(Is, Map, [I|Acc]);
-remap([return|_]=Is, _, Acc) ->
-    reverse(Acc, Is);
-remap([{line,_}=I|Is], Map, Acc) ->
-    remap(Is, Map, [I|Acc]).
+    [I | remap(Is, Map)];
+remap([return|_]=Is, _Map) ->
+    Is.
 
-remap_block([{set,Ds0,Ss0,Info}|Is], Map, Acc) ->
+remap_block([{set,Ds0,Ss0,Info}|Is], Map) ->
     Ds = [Map(D) || D <- Ds0],
     Ss = [Map(S) || S <- Ss0],
-    remap_block(Is, Map, [{set,Ds,Ss,Info}|Acc]);
-remap_block([], _, Acc) -> reverse(Acc).
+    [{set,Ds,Ss,Info} | remap_block(Is, Map)];
+remap_block([], _Map) ->
+    [].
 
 %% safe_labels([Instruction], Accumulator) -> gb_set()
 %%  Build a gb_set of safe labels. The code at a safe
