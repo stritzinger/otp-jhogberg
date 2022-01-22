@@ -520,14 +520,19 @@ do_usage([{block,Blk}|Is], Regs0, Acc) ->
     Regs = do_usage_blk(Blk, Regs0),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{bs_get_tail,Src,Dst,_}|Is], Regs0, Acc) ->
-    Regs1 = ordsets:union(Regs0, yregs([Src])),
-    Regs = ordsets:del_element(Dst, Regs1),
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs([Src])),
+    do_usage(Is, Regs, [Regs|Acc]);
+do_usage([{bs_get_position,Src,Dst,_Live}|Is], Regs0, Acc) ->
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs([Src])),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{bs_set_position,Src1,Src2}|Is], Regs0, Acc) ->
     Regs = ordsets:union(Regs0, yregs([Src1,Src2])),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{bs_start_match4,_Fail,_Live,Src,Dst}|Is], Regs0, Acc) ->
-    Regs = ordsets:union(Regs0, yregs([Src,Dst])),
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs([Src])),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{call,_,_}|Is], Regs, Acc) ->
     do_usage(Is, Regs, [Regs|Acc]);
@@ -536,24 +541,24 @@ do_usage([{call_ext,_,_}|Is], Regs, Acc) ->
 do_usage([{call_fun,_}|Is], Regs, Acc) ->
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{bif,_,{f,_},Ss,Dst}|Is], Regs0, Acc) ->
-    Regs1 = ordsets:union(Regs0, yregs(Ss)),
-    Regs = ordsets:del_element(Dst, Regs1),
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs(Ss)),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{gc_bif,_,{f,_},_,Ss,Dst}|Is], Regs0, Acc) ->
-    Regs1 = ordsets:union(Regs0, yregs(Ss)),
-    Regs = ordsets:del_element(Dst, Regs1),
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs(Ss)),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{get_map_elements,{f,_},S,{list,List}}|Is], Regs0, Acc) ->
     {Ss,Ds} = beam_utils:split_even(List),
-    Regs1 = ordsets:union(Regs0, yregs([S|Ss])),
-    Regs = ordsets:subtract(Regs1, yregs(Ds)),
+    Regs1 = ordsets:subtract(Regs0, yregs(Ds)),
+    Regs = ordsets:union(Regs1, yregs([S|Ss])),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{init_yregs,{list,Ds}}|Is], Regs0, Acc) ->
     Regs = ordsets:subtract(Regs0, Ds),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{make_fun3,_,_,_,Dst,{list,Ss}}|Is], Regs0, Acc) ->
-    Regs1 = ordsets:union(Regs0, yregs(Ss)),
-    Regs = ordsets:del_element(Dst, Regs1),
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs(Ss)),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{line,_}|Is], Regs, Acc) ->
     do_usage(Is, Regs, [Regs|Acc]);
@@ -570,8 +575,8 @@ do_usage([{test,_,{f,_},Ss}|Is], Regs0, Acc) ->
     Regs = ordsets:union(Regs0, yregs(Ss)),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([{test,_,{f,_},_,Ss,Dst}|Is], Regs0, Acc) ->
-    Regs1 = ordsets:union(Regs0, yregs(Ss)),
-    Regs = ordsets:del_element(Dst, Regs1),
+    Regs1 = ordsets:del_element(Dst, Regs0),
+    Regs = ordsets:union(Regs1, yregs(Ss)),
     do_usage(Is, Regs, [Regs|Acc]);
 do_usage([_I|_], _, _) ->
     %% io:format("~p\n", [I]),
@@ -583,9 +588,10 @@ do_usage(_, _, _) ->
 
 do_usage_blk([{set,Ds,Ss,_}|Is], Regs0) ->
     Regs1 = do_usage_blk(Is, Regs0),
-    Regs = ordsets:union(Regs1, yregs(Ss)),
-    ordsets:subtract(Regs, ordsets:from_list(Ds));
-do_usage_blk([], Regs) -> Regs.
+    Regs = ordsets:subtract(Regs1, ordsets:from_list(Ds)),
+    ordsets:union(Regs, yregs(Ss));
+do_usage_blk([], Regs) ->
+    Regs.
 
 yregs(Rs) ->
     ordsets:from_list(yregs_1(Rs)).
