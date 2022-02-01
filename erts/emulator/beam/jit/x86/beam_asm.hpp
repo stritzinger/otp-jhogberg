@@ -1102,6 +1102,10 @@ class BeamModuleAssembler : public BeamAssembler {
     /* Save the last PC for an error. */
     size_t last_error_offset = 0;
 
+    /* Skip unnecessary moves in mov_arg. */
+    size_t last_movarg_offset = 0;
+    x86::Gp last_movarg_from;
+    x86::Mem last_movarg_to;
 public:
     BeamModuleAssembler(BeamGlobalAssembler *ga,
                         Eterm mod,
@@ -1405,7 +1409,18 @@ protected:
     /* Note: May clear flags. */
     void mov_arg(x86::Gp to, const ArgVal &from, const x86::Gp &spill) {
         if (from.isRegister()) {
-            a.mov(to, getArgRef(from));
+            auto mem = getArgRef(from);
+
+            if (a.offset() == last_movarg_offset && mem == last_movarg_to) {
+                if (last_movarg_from != to) {
+                    comment("simplified mov_arg");
+                    a.mov(to, last_movarg_from);
+                } else {
+                    comment("skipped mov_arg");
+                }
+            } else {
+                a.mov(to, mem);
+            }
         } else if (from.isLiteral()) {
             make_move_patch(to, literals[from.getValue()].patches);
         } else {
@@ -1430,7 +1445,12 @@ protected:
     void mov_arg(const ArgVal &to, x86::Gp from, const x86::Gp &spill) {
         (void)spill;
 
-        a.mov(getArgRef(to), from);
+        auto mem = getArgRef(to);
+        a.mov(mem, from);
+
+        last_movarg_offset = a.offset();
+        last_movarg_to = mem;
+        last_movarg_from = from;
     }
 
     void mov_arg(const ArgVal &to, BeamInstr from, const x86::Gp &spill) {

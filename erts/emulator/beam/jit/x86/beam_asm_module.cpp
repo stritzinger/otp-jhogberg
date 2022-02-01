@@ -329,6 +329,9 @@ void BeamModuleAssembler::emit_label(const ArgVal &Label) {
 
     currLabel = rawLabels[Label.getValue()];
     a.bind(currLabel);
+
+    /* Kill our mov experiment... */
+    last_movarg_offset = ~0;
 }
 
 void BeamModuleAssembler::emit_aligned_label(const ArgVal &Label,
