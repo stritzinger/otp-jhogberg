@@ -797,7 +797,7 @@ struct Inst {
   };
 
   //! Tests whether the `instId` is defined (counts also Inst::kIdNone, which must be zero).
-  static inline bool isDefinedId(InstId instId) noexcept { return instId < _kIdCount; }
+  static inline bool isDefinedId(InstId instId) noexcept { return (instId & uint32_t(InstIdParts::kRealId)) < _kIdCount; }
 };
 
 namespace Predicate {
