@@ -25,8 +25,14 @@ MODULES   = $(EXAMPLES) $(EXAMPLES:%=%_cb)
 
 BEAM = $(MODULES:%=%.beam)
 
+ifeq ($(ERL_DETERMINISTIC),yes)
+	DETERMINISM_FLAG = +deterministic
+else
+	DETERMINISM_FLAG =
+endif
+
 %.beam: %.erl
-	erlc -W $<
+	erlc -W $(DETERMINISM_FLAG) $<
 
 all: $(BEAM)
 
