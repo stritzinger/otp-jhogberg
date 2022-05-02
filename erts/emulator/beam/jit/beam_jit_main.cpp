@@ -137,52 +137,12 @@ static JitAllocator *pick_allocator() {
     JitAllocator::CreateParams single_params;
     single_params.reset();
 
-#if defined(HAVE_LINUX_PERF_SUPPORT)
-    /* `perf` has a hard time showing symbols for dual-mapped memory, so we'll
-     * use single-mapped memory when enabled. */
-    if (erts_jit_perf_support & (BEAMASM_PERF_DUMP | BEAMASM_PERF_MAP)) {
-        if (auto *alloc = create_allocator(&single_params)) {
-            return alloc;
-        }
-
-        ERTS_INTERNAL_ERROR("jit: Failed to allocate executable+writable "
-                            "memory. Either allow this or disable the "
-                            "'+JPperf' option.");
-    }
-#endif
-
-#if !defined(VALGRIND)
-    /* Default to dual-mapped memory with separate executable and writable
-     * regions of the same code. This is required for platforms that enforce
-     * W^X, and we prefer it when available to catch errors sooner.
-     *
-     * `blockSize` is analogous to "carrier size," and we pick something
-     * much larger than the default since dual-mapping implies having one
-     * file descriptor per block on most platforms. The block sizes do grow
-     * over time, but we don't want to waste half a dozen fds just to get to
-     * the shell on platforms that are very fd-constrained. */
-    JitAllocator::CreateParams dual_params;
-
-    dual_params.reset();
-    dual_params.options = JitAllocatorOptions::kUseDualMapping,
-    dual_params.blockSize = 4 << 20;
-
-    if (auto *alloc = create_allocator(&dual_params)) {
-        return alloc;
-    } else if (auto *alloc = create_allocator(&single_params)) {
-        return alloc;
-    }
-
-    ERTS_INTERNAL_ERROR("jit: Cannot allocate executable memory. Use the "
-                        "interpreter instead.");
-#elif defined(VALGRIND)
     if (auto *alloc = create_allocator(&single_params)) {
         return alloc;
     }
 
-    ERTS_INTERNAL_ERROR("jit: the valgrind emulator requires the ability to "
-                        "allocate executable+writable memory.");
-#endif
+    ERTS_INTERNAL_ERROR("jit: Failed to allocate executable+writable "
+                        "memory.");
 }
 
 void beamasm_init() {
