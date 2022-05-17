@@ -1298,6 +1298,16 @@ cg_block([#cg_set{op=wait_timeout,dst=Bool,args=Args0}], {Bool,Fail}, St) ->
                  [{wait_timeout,Fail,Timeout},timeout]
          end,
     {Is,St};
+cg_block([#cg_set{op=update_record,
+                  anno=Anno,
+                  dst=Dst0,
+                  args=Args0} | T], Context, St0) ->
+    [Hint, {integer,Size}, Src | Updates] = typed_args(Args0, Anno, St0),
+    Dst = beam_arg(Dst0, St0),
+    Ss = cg_update_record_list(Updates, []),
+    Is0 = [{update_record,Hint,Size,Src,Dst,{list,Ss}}],
+    {Is1,St} = cg_block(T, Context, St0),
+    {Is0++Is1,St};
 cg_block([#cg_set{op=Op,dst=Dst0,args=Args0}=Set], none, St) ->
     [Dst|Args] = beam_args([Dst0|Args0], St),
     Is = cg_instr(Op, Args, Dst, Set),
@@ -1773,10 +1783,7 @@ cg_instr(recv_marker_reserve, [], Dst) ->
 cg_instr(remove_message, [], _Dst) ->
     [remove_message];
 cg_instr(resume, [A,B], _Dst) ->
-    [{bif,raise,{f,0},[A,B],{x,0}}];
-cg_instr(update_record, [Hint, {integer,Size}, Src | Ss0], Dst) ->
-    Ss = cg_update_record_list(Ss0, []),
-    [{update_record,Hint,Size,Src,Dst,{list,Ss}}].
+    [{bif,raise,{f,0},[A,B],{x,0}}].
 
 cg_test(bs_skip, Fail, Args, _Dst, I) ->
     cg_bs_skip(Fail, Args, I);

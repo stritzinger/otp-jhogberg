@@ -880,6 +880,10 @@ kernel_passes() ->
        {iff,dssaopt,{listing,"ssaopt"}},
        {unless,no_ssa_opt,{iff,ssalint,{pass,beam_ssa_lint}}},
 
+       {unless,no_ssa_opt,{pass,beam_ssa_lifetimes}},
+       {iff,dssalife,{listing,"ssalife"}},
+       {unless,no_ssa_opt,{iff,ssalint,{pass,beam_ssa_lint}}},
+
        {unless,no_throw_opt,{pass,beam_ssa_throw}},
        {iff,dthrow,{listing,"throw"}},
        {unless,no_throw_opt,{iff,ssalint,{pass,beam_ssa_lint}}}]},
@@ -2087,6 +2091,7 @@ pre_load() ->
 	 beam_ssa_bsm,
 	 beam_ssa_codegen,
 	 beam_ssa_dead,
+	 beam_ssa_lifetimes,
 	 beam_ssa_opt,
 	 beam_ssa_pre_codegen,
 	 beam_ssa_recv,

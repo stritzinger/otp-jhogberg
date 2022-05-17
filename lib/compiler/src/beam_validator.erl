@@ -670,7 +670,9 @@ vi({set_tuple_element,Src,Tuple,N}, Vst) ->
     ArgType = get_term_type(Src, Vst),
     TupleType = beam_types:update_tuple(TupleType0, [{I, ArgType}]),
     override_type(TupleType, Tuple, Vst);
-vi({update_record,_Hint,Size,Src,Dst,{list,Ss}}, Vst) ->
+vi({update_record,_Hint,Size,Src0,Dst,{list,Ss0}}, Vst) ->
+    Src = unpack_typed_arg(Src0),
+    Ss = [unpack_typed_arg(S) || S <- Ss0],
     verify_update_record(Size, Src, Dst, Ss, Vst);
 
 %%

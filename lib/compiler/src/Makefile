@@ -65,6 +65,7 @@ MODULES =  \
 	beam_ssa_bsm \
 	beam_ssa_codegen \
 	beam_ssa_dead \
+	beam_ssa_lifetimes \
 	beam_ssa_lint \
 	beam_ssa_opt \
 	beam_ssa_pp \
@@ -205,6 +206,7 @@ $(EBIN)/beam_ssa_bsm.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_bool.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_codegen.beam: beam_ssa.hrl beam_asm.hrl
 $(EBIN)/beam_ssa_dead.beam: beam_ssa.hrl
+$(EBIN)/beam_ssa_lifetimes.beam: beam_ssa.hrl beam_types.hrl
 $(EBIN)/beam_ssa_lint.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_opt.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_pp.beam: beam_ssa.hrl
