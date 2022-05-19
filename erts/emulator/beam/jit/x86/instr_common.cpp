@@ -788,47 +788,88 @@ void BeamModuleAssembler::emit_update_record(const ArgAtom &Hint,
 
     mov_arg(RET, Src);
 
-    /* Setting a field to the same value is pretty common, so we'll check for
-     * that since it's vastly cheaper than copying if we're right, and doesn't
-     * cost much if we're wrong. */
-    if (Hint.get() == am_reuse && updates.size() == 2) {
-        const auto next_index = updates[0].as<ArgWord>().get();
-        const auto &next_value = updates[1].as<ArgSource>();
+    if (Hint.get() == am_destructive) {
+        /* FIXME: ensure that new_heap_start is set to p->htop after every
+         * GC (including delayed ones). It must point into the same allocation
+         * for the barrier to work. */
+        Label copy = a.newLabel(), write = a.newLabel();
 
         a.mov(ARG1, RET);
-        ptr_val = emit_ptr_val(ARG1, ARG1);
-        cmp_arg(emit_boxed_val(ptr_val, next_index * sizeof(Eterm)),
-                next_value,
-                ARG2);
-        a.je(next);
-    }
+        a.cmp(RET, x86::qword_ptr(c_p, offsetof(Process, new_heap_start)));
+        a.cmovb(ARG1, HTOP);
+        a.cmp(ARG1, HTOP);
+        a.jb(write);
 
-    ptr_val = emit_ptr_val(RET, RET);
+        a.bind(copy);
+        {
+            emit_copy_words(emit_boxed_val(RET), x86::qword_ptr(HTOP),
+                            size_on_heap, ARG1);
 
-    for (size_t i = 0; i < updates.size(); i += 2) {
-        const auto next_index = updates[i].as<ArgWord>().get();
-        const auto &next_value = updates[i + 1].as<ArgSource>();
+            a.lea(RET, x86::qword_ptr(HTOP, TAG_PRIMARY_BOXED));
+            a.add(HTOP, imm(size_on_heap * sizeof(Eterm)));
 
-        ASSERT(next_index > 0 && next_index >= copy_index);
+            /* !! FALL THROUGH !! */
+        }
+
+        a.bind(write);
+        {
+            for (size_t i = 0; i < updates.size(); i += 2) {
+                const auto next_index = updates[i].as<ArgWord>().get();
+                const auto &next_value = updates[i + 1].as<ArgSource>();
+
+                ASSERT(next_index > 0 && next_index >= copy_index);
+                mov_arg(emit_boxed_val(RET, next_index * sizeof(Eterm)),
+                        next_value,
+                        ARG1);
+                copy_index = next_index + 1;
+            }
+        }
+    } else {
+        /* Setting a field to the same value is pretty common, so we'll check
+         * forthat since it's vastly cheaper than copying if we're right, and
+         * doesn't cost much if we're wrong. */
+
+        /* FIXME: !! DISABLED DURING DESTRUCTIVE UPDATE EXPERIMENT !! */
+
+        // if (Hint.get() == am_reuse && updates.size() == 2) {
+        //     const auto next_index = updates[0].as<ArgWord>().get();
+        //     const auto &next_value = updates[1].as<ArgSource>();
+
+        //     a.mov(ARG1, RET);
+        //     ptr_val = emit_ptr_val(ARG1, ARG1);
+        //     cmp_arg(emit_boxed_val(ptr_val, next_index * sizeof(Eterm)),
+        //             next_value,
+        //             ARG2);
+        //     a.je(next);
+        // }
+
+        ptr_val = emit_ptr_val(RET, RET);
+
+        for (size_t i = 0; i < updates.size(); i += 2) {
+            const auto next_index = updates[i].as<ArgWord>().get();
+            const auto &next_value = updates[i + 1].as<ArgSource>();
+
+            ASSERT(next_index > 0 && next_index >= copy_index);
+
+            emit_copy_words(emit_boxed_val(ptr_val, copy_index * sizeof(Eterm)),
+                            x86::qword_ptr(HTOP, copy_index * sizeof(Eterm)),
+                            next_index - copy_index,
+                            ARG1);
+
+            mov_arg(x86::qword_ptr(HTOP, next_index * sizeof(Eterm)),
+                    next_value,
+                    ARG1);
+            copy_index = next_index + 1;
+        }
 
         emit_copy_words(emit_boxed_val(ptr_val, copy_index * sizeof(Eterm)),
                         x86::qword_ptr(HTOP, copy_index * sizeof(Eterm)),
-                        next_index - copy_index,
+                        size_on_heap - copy_index,
                         ARG1);
 
-        mov_arg(x86::qword_ptr(HTOP, next_index * sizeof(Eterm)),
-                next_value,
-                ARG1);
-        copy_index = next_index + 1;
+        a.lea(RET, x86::qword_ptr(HTOP, TAG_PRIMARY_BOXED));
+        a.add(HTOP, imm(size_on_heap * sizeof(Eterm)));
     }
-
-    emit_copy_words(emit_boxed_val(ptr_val, copy_index * sizeof(Eterm)),
-                    x86::qword_ptr(HTOP, copy_index * sizeof(Eterm)),
-                    size_on_heap - copy_index,
-                    ARG1);
-
-    a.lea(RET, x86::qword_ptr(HTOP, TAG_PRIMARY_BOXED));
-    a.add(HTOP, imm(size_on_heap * sizeof(Eterm)));
 
     a.bind(next);
     mov_arg(Dst, RET);

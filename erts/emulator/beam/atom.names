@@ -212,6 +212,7 @@ atom decimals
 atom default
 atom delay_trap
 atom demonitor
+atom destructive
 atom deterministic
 atom dictionary
 atom dirty_bif_exception

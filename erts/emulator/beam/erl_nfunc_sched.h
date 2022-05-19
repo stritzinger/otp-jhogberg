@@ -224,6 +224,7 @@ erts_flush_dirty_shadow_proc(Process *sproc)
     ASSERT(c_p->htop <= sproc->htop && sproc->htop <= c_p->stop);
 
     c_p->htop = sproc->htop;
+    c_p->new_heap_start = c_p->htop;
 
     if (!c_p->mbuf)
 	c_p->mbuf = sproc->mbuf;

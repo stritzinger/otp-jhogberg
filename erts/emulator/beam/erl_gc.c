@@ -523,6 +523,7 @@ delay_garbage_collection(Process *p, ErlHeapFragment *live_hf_end, int need, int
     copy_erlang_stack(p, &hfrag->mem[0], hsz);
 
     p->heap = p->htop = &hfrag->mem[0];
+    p->new_heap_start = p->htop;
     p->hend = hend = &hfrag->mem[hsz];
 
     if (p->abandoned_heap) {
@@ -1003,6 +1004,7 @@ garbage_collect_hibernate(Process* p, int check_long_gc)
     erts_deallocate_young_generation(p);
 
     p->heap = heap;
+    p->new_heap_start = htop;
     p->high_water = htop;
     p->htop = htop;
     p->hend = p->heap + heap_size;
@@ -1056,6 +1058,7 @@ garbage_collect_hibernate(Process* p, int check_long_gc)
     offset_rootset(p, offs, 0, area, area_sz, p->arg_reg, p->arity);
     p->htop = heap + actual_size;
     p->heap = heap;
+    p->new_heap_start = p->htop;
     p->heap_sz = heap_size;
 
 
@@ -1770,6 +1773,7 @@ do_minor(Process *p, ErlHeapFragment *live_hf_end,
     erts_deallocate_young_generation(p);
 
     HEAP_START(p) = n_heap;
+    p->new_heap_start = n_htop;
     HEAP_TOP(p) = n_htop;
     HEAP_END(p) = n_heap + new_sz;
 
@@ -1860,6 +1864,7 @@ major_collection(Process* p, ErlHeapFragment *live_hf_end,
     erts_deallocate_young_generation(p);
 
     HEAP_START(p) = n_heap;
+    p->new_heap_start = n_htop;
     HEAP_TOP(p) = n_htop;
     HEAP_END(p) = n_heap + new_sz;
 
@@ -2797,6 +2802,7 @@ static void resize_new_heap(Process *p, Uint new_sz, Eterm* objv, int nobj)
 
     HEAP_TOP(p) = &new_heap[heap_used];
     HEAP_START(p) = new_heap;
+    p->new_heap_start = HEAP_TOP(p);
 
     STACK_START(p) = &new_heap[new_sz];
     STACK_TOP(p) = new_stack;

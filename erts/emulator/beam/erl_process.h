@@ -1027,6 +1027,7 @@ struct process {
 
     Eterm* heap;		/* Heap start */
     Eterm* hend;		/* Heap end */
+    Eterm* new_heap_start;		/* Heap start */
     Eterm* abandoned_heap;
     Uint heap_sz;		/* Size of heap in words */
     Uint min_heap_size;         /* Minimum size of heap (in words). */

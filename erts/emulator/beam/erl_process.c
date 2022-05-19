@@ -12206,6 +12206,7 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     p->hend = p->heap + sz;
     p->stop = p->hend - CP_SIZE; /* Reserve place for continuation pointer. */
     p->htop = p->heap;
+    p->new_heap_start = p->htop;
     p->heap_sz = sz;
     p->abandoned_heap = NULL;
     p->live_hf_end = ERTS_INVALID_HFRAG_PTR;
