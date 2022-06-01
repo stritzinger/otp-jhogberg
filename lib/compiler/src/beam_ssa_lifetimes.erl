@@ -98,7 +98,7 @@ scan_update_calls([#b_set{op=call,args=[#b_local{}=Callee | Args]} | Calls],
     %% The arguments were consumed by this call, so we don't need to check the
     %% candidate set.
     #mutability{consumed=Consumed} = Mutability,
-    ArgMutability = [gb_sets:is_element(Arg, Consumed) orelse is_record(Arg, b_literal) || Arg <- Args],
+    ArgMutability = [gb_sets:is_element(Arg, Consumed) || Arg <- Args],
     St = scan_update_args(Callee, ArgMutability, St0),
     scan_update_calls(Calls, Mutability, St);
 scan_update_calls([], _Mutability, St) ->
@@ -255,13 +255,6 @@ scan_is([#b_set{op=update_record,
     Mutability1 = store(Updates, Mutability0),
     Mutability = consume([Source], Mutability1),
     scan_is(Is, Fdb, nominate(Dst, Mutability), Calls, Ls, St);
-scan_is([#b_set{op=bs_create_bin,
-                 dst=Dst,
-                 args=[_, _, Source | Updates]} | Is],
-         Fdb, Mutability0, Calls, Ls, St) ->
-    Mutability1 = store(Updates, Mutability0),
-    Mutability = consume([Source], Mutability1),
-    scan_is(Is, Fdb, nominate(Dst, Mutability), Calls, Ls, St);
 scan_is([#b_set{op={succeeded,_}} | Is], Fdb, Mutability, Calls, Ls, St) ->
     scan_is(Is, Fdb, Mutability, Calls, Ls, St);
 scan_is([#b_set{op=get_tuple_element,args=[Tuple, _Index]} | Is],
@@ -285,7 +278,7 @@ scan_update_successors(#b_ret{arg=Arg}, Mutability0, Calls, MutRet0, Ls, St0) ->
     %% as we'd otherwise risk returning an alias.
     #mutability{consumed=Consumed} = Mutability = consume([Arg], Mutability0),
     St = scan_update_calls(gb_sets:to_list(Calls), Mutability, St0),
-    MutRet = MutRet0 and (gb_sets:is_element(Arg, Consumed) orelse is_record(Arg, b_literal)),
+    MutRet = MutRet0 and gb_sets:is_element(Arg, Consumed),
     {MutRet, Ls, St};
 scan_update_successors(Last, Mutability, Calls, MutRet, Ls0, St) ->
     Ls = update_successors(Last, {Mutability, Calls}, Ls0),
@@ -359,12 +352,6 @@ plan_is([#b_set{op=update_record,
     %% modify the ssa_type pass so that it creates a `none` hint by default,
     %% which can then be turned into `reuse` in this pass if we determine that
     %% the result is observed (blacklisted).
-    Mutability1 = store(Updates, Mutability0),
-    {Mutability, Mutations} = plan_mutate(I, Source, Mutability1, Mutations0),
-    plan_is(Is, Fdb, Ls, Mutability, Mutations);
-plan_is([#b_set{op=bs_create_bin,
-                args=[_, _, Source | Updates]}=I | Is],
-        Fdb, Ls, Mutability0, Mutations0) ->
     Mutability1 = store(Updates, Mutability0),
     {Mutability, Mutations} = plan_mutate(I, Source, Mutability1, Mutations0),
     plan_is(Is, Fdb, Ls, Mutability, Mutations);
@@ -470,13 +457,6 @@ opt_is([#b_set{op=update_record,dst=Dst,args=[_Hint | Args]}=I0 | Is],
        Mutations) ->
     I = case gb_sets:is_element(Dst, Mutations) of
             true -> I0#b_set{args=[#b_literal{val=destructive} | Args]};
-            false -> I0
-        end,
-    [I | opt_is(Is, Mutations)];
-opt_is([#b_set{op=bs_create_bin,dst=Dst,args=[#b_literal{val=append} | Args]}=I0 | Is],
-       Mutations) ->
-    I = case gb_sets:is_element(Dst, Mutations) of
-        true -> I0#b_set{args=[#b_literal{val=private_append} | Args]};
             false -> I0
         end,
     [I | opt_is(Is, Mutations)];
