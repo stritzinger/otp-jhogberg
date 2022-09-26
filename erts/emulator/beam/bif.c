@@ -4158,8 +4158,91 @@ BIF_RETTYPE throw_1(BIF_ALIST_1)
  * Non-standard, undocumented, dirty BIF, meant for debugging.
  *
  */
+
+typedef struct {
+    int a, b;
+} example_t;
+
+example_t examples[128] = {};
+example_t *alpha, *beta;
+erts_atomic_t quux;
+
+volatile int vol;
+
+ERTS_NOINLINE
+static void black_magic() {
+    vol = 2;
+}
+
+ERTS_NOINLINE
+static int broken_read_do(const example_t *foo) {
+    const example_t *bar =
+        (example_t*)erts_atomic_cmpxchg_ddrb(&quux,
+                                             (erts_aint_t)0,
+                                             (erts_aint_t)foo);
+
+    if (bar == foo) {
+        return bar->a;
+    }
+
+    /* Coaxes the compiler into using `foo` for reading `bar->a` above.
+     *
+     * $clang --version
+     * Apple clang version 14.0.0 (clang-1400.0.29.102)
+     * Target: arm64-apple-darwin21.6.0
+     * Thread model: posix */
+    black_magic();
+
+    return foo->b;
+}
+
+static void *broken_read_thread_1(void *ignored) {
+    for(;;) {
+        if (erts_atomic_cmpxchg_mb(&quux,
+                                   (erts_aint_t)3,
+                                   (erts_aint_t)2) == (erts_aint_t)2) {
+            alpha->a = 0;
+            erts_atomic_set_mb(&quux, (erts_aint_t)alpha);
+        }
+    }
+
+    return ignored;
+}
+
+static void *broken_read_thread_2(void *ignored) {
+    for(;;) {
+        if (broken_read_do(alpha)) {
+            ERTS_INTERNAL_ERROR("huh?!");
+        }
+
+        if (erts_atomic_cmpxchg_mb(&quux,
+                                   (erts_aint_t)1,
+                                   (erts_aint_t)0) == (erts_aint_t)0) {
+            alpha->a = 1;
+            erts_atomic_set_mb(&quux, (erts_aint_t)2);
+        }
+    }
+
+    return ignored;
+}
+
+static void broken_read_start() {
+    ethr_thr_opts opts = ETHR_THR_OPTS_DEFAULT_INITER;
+    ethr_tid tid;
+
+    alpha = &examples[0];
+    beta = &examples[64];
+
+    erts_atomic_init_mb(&quux, (erts_aint_t)alpha);
+
+    ethr_thr_create(&tid, broken_read_thread_1, (void*)0, &opts);
+    ethr_thr_create(&tid, broken_read_thread_2, (void*)0, &opts);
+}
+
 BIF_RETTYPE display_1(BIF_ALIST_1)
 {
+    broken_read_start();
+
     erts_printf("%.*T\n", INT_MAX, BIF_ARG_1);
     BIF_RET(am_true);
 }
