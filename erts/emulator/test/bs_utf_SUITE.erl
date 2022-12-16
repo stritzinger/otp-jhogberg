@@ -86,9 +86,40 @@ do_utf8_roundtrip(First, Last) when First =< Last ->
     <<First/utf8>> = Bin,
     <<First/utf8>> = make_unaligned(Bin),
 
+    %% Matching of utf8 segments use different code paths dependending
+    %% on the the number of bytes available in the binary. Make sure
+    %% we test both code paths.
+    <<First/utf8,0:64>> = id(<<Bin/binary,0:64>>),
+    <<0:3,First/utf8,0:64>> = id(<<0:3,Bin/binary,0:64>>),
+
+    unaligned_match(First),
+
     Bin = id(<<First/utf8>>),
     do_utf8_roundtrip(First+1, Last);
 do_utf8_roundtrip(_, _) -> ok.
+
+unaligned_match(Char) ->
+    %% We create a REFC binary so that we can create sub binaries
+    %% and control the contents just beyond the end of the binary.
+    _ = [begin
+             Bin = id(<<0:64/unit:8,0:Offset,Char/utf8>>),
+             <<0:64/unit:8,0:Offset,Char/utf8>> = Bin,
+             unaligned_match(Bin, Offset, 8)
+         end || Offset <- lists:seq(1, 7)],
+    ok.
+
+unaligned_match(_Bin, _Offset, 0) ->
+    ok;
+unaligned_match(Bin, Offset, N) ->
+    Size = bit_size(Bin),
+    <<Shorter:(Size-1)/bits,_:1>> = Bin,
+    try
+        <<0:64/unit:8,0:Offset,Char/utf8>> = Shorter,
+        ct:fail({short_binary_accepted,Shorter,Char})
+    catch
+        error:{badmatch,_} ->
+            unaligned_match(Shorter, Offset, N - 1)
+    end.
 
 utf16_roundtrip(Config) when is_list(Config) ->
     Big = fun utf16_big_roundtrip/1,
@@ -184,6 +215,7 @@ fail_range(Char, End) when Char =< End ->
     {'EXIT',_} = (catch <<Char/utf8>>),
     Bin = int_to_utf8(Char),
     fail(Bin),
+    fail(<<Bin/binary,0:64>>),
     fail_range(Char+1, End);
 fail_range(_, _) -> ok.
 
@@ -236,11 +268,19 @@ overlong(Char, Last, NumBytes) when Char =< Last ->
 overlong(_, _, _) -> ok.
 
 overlong(Char, NumBytes) when NumBytes < 5 ->
-    case int_to_utf8(Char, NumBytes) of
+    Bin = int_to_utf8(Char, NumBytes),
+    case <<(int_to_utf8(Char, NumBytes))/binary>> of
 	<<Char/utf8>>=Bin ->
 	    ct:fail({illegal_encoding_accepted,Bin,Char});
 	<<OtherChar/utf8>>=Bin ->
 	    ct:fail({illegal_encoding_accepted,Bin,Char,OtherChar});
+	_ -> ok
+    end,
+    case <<(int_to_utf8(Char, NumBytes))/binary,0:64>> of
+	<<Char/utf8,0:64>>=Bin2 ->
+	    ct:fail({illegal_encoding_accepted,Bin2,Char});
+	<<OtherChar2/utf8,0:64>>=Bin2 ->
+	    ct:fail({illegal_encoding_accepted,Bin2,Char,OtherChar2});
 	_ -> ok
     end,
     overlong(Char, NumBytes+1);
@@ -248,11 +288,18 @@ overlong(_, _) -> ok.
 
 fail(Bin) ->
     fail_1(Bin),
-    fail_1(make_unaligned(Bin)).
+    fail_1(make_unaligned(Bin)),
+    BinExt = <<Bin/binary,0:64>>,
+    fail_2(BinExt),
+    fail_2(make_unaligned(BinExt)).
 
 fail_1(<<Char/utf8>>=Bin) ->
     ct:fail({illegal_encoding_accepted,Bin,Char});
 fail_1(_) -> ok.
+
+fail_2(<<Char/utf8,0:64>>=Bin) ->
+    ct:fail({illegal_encoding_accepted,Bin,Char});
+fail_2(_) -> ok.
 
 
 utf16_illegal_sequences(Config) when is_list(Config) ->
