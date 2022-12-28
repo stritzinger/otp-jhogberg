@@ -1018,158 +1018,115 @@ void BeamModuleAssembler::emit_i_bs_put_utf8(const ArgLabel &Fail,
     }
 }
 
-/*
- * ARG1 = pointer to match state
- * ARG2 = position in binary in bits
- * ARG3 = base pointer to binary data
- * RET = number of bits left in binary (< 32)
- *
- * See the comment for emit_bs_get_utf8_shared() for details about the
- * return value.
- */
-void BeamGlobalAssembler::emit_bs_get_utf8_short_shared() {
-    const int position_offset = offsetof(ErlBinMatchBuffer, offset);
-
-    const x86::Gp ctx = ARG1;
-    const x86::Gp bin_position = ARG2;
-    const x86::Gp bin_base = ARG3;
-
-    Label at_least_one = a.newLabel();
-    Label two = a.newLabel();
-    Label three_or_more = a.newLabel();
-    Label four = a.newLabel();
-    Label five = a.newLabel();
-    Label read_done = a.newLabel();
-    Label ascii = a.newLabel();
-
-    /* Calculate the number of bytes remaining in the binary and error
-     * out if less than one. */
-    a.shr(RETd, imm(3));
-    a.test(RETd, RETd);
-    a.short_().jne(at_least_one);
-
-    /* ZF is is already set. */
-    a.ret();
-
-    a.bind(at_least_one);
-
-    /* Save number of bytes remaining in binary. */
-    a.mov(ARG5d, RETd);
-
-    /* If the position in the binary is not byte-aligned, we'll need
-     * to read one more byte. */
-    a.test(bin_position, imm(7));
-    a.setne(ARG4.r8());
-    a.add(RETb, ARG4.r8());
-
-    /* Save original position in bits and set up byte offset for
-     * reading. */
-    a.push(bin_position);
-    a.shr(bin_position, imm(3));
-
-    a.cmp(RETb, imm(2));
-    a.short_().je(two);
-    a.short_().ja(three_or_more);
-
-    /* Read one byte (always byte-aligned). */
-    a.mov(RETb, x86::byte_ptr(bin_base, bin_position));
-    a.movzx(RETd, RETb);
-    a.short_().jmp(read_done);
-
-    /* Read two bytes. */
-    a.bind(two);
-    a.mov(RET.r16(), x86::word_ptr(bin_base, bin_position));
-    a.movzx(RETd, RET.r16());
-    a.short_().jmp(read_done);
-
-    a.bind(three_or_more);
-    a.cmp(RETb, imm(4));
-    a.short_().je(four);
-    a.short_().ja(five);
-
-    /* Read three bytes. */
-    a.mov(RET.r8(), x86::byte_ptr(bin_base, bin_position, 0, 2));
-    a.movzx(RETd, RETb);
-    a.shl(RETd, imm(16));
-    a.mov(RET.r16(), x86::word_ptr(bin_base, bin_position));
-    a.short_().jmp(read_done);
-
-    /* Read four bytes (always unaligned). */
-    a.bind(four);
-    a.mov(RETd, x86::dword_ptr(bin_base, bin_position));
-    a.short_().jmp(read_done);
-
-    /* Read five bytes (always unaligned). */
-    a.bind(five);
-    a.mov(RETd, x86::dword_ptr(bin_base, bin_position));
-    a.mov(ARG4.r8(), x86::byte_ptr(bin_base, bin_position, 0, 4));
-    a.movzx(ARG4d, ARG4.r8());
-    a.shl(ARG4, imm(32));
-    a.or_(RET, ARG4);
-
-    /* Handle the bytes read. */
-    a.bind(read_done);
-    a.pop(bin_position);
-    a.bswap(RET);
-
-    if (x86::rcx == ctx) {
-        a.push(x86::rcx);
-    }
-    a.mov(x86::ecx, bin_position.r32());
-    a.and_(x86::cl, imm(7));
-    a.shl(RET, x86::cl);
-
-    /* Calculate a byte mask and zero out trailing garbage. */
-    a.mov(x86::cl, 64);
-    a.shl(ARG5, imm(3));
-    a.sub(x86::cl, ARG5.r8());
-    mov_imm(ARG5, -1);
-    a.shl(ARG5, x86::cl);
-    a.and_(RET, ARG5);
-
-    if (x86::rcx == ctx) {
-        a.pop(x86::rcx);
-    }
-
-    a.test(RET, RET);
-    a.short_().jns(ascii);
-
-    /* The bs_get_utf8_shared expects the contents in RETd. */
-    a.shr(RET, imm(32));
-    a.jmp(labels[bs_get_utf8_shared]);
-
-    /* Handle plain old ASCII (code point < 128). */
-    a.bind(ascii);
-    a.add(x86::qword_ptr(ctx, position_offset), imm(8));
-    a.shr(RET, imm(56 - _TAG_IMMED1_SIZE));
-    a.or_(RET, imm(_TAG_IMMED1_SMALL)); /* Always clears ZF. */
-    a.ret();
-}
+static constexpr int ERTS_JIT_UTF8_NUM_RANGES = 1 << 4;
+static constexpr int ERTS_JIT_UTF8_RANGE_SHIFT = 4;
+static constexpr int ERTS_JIT_UTF8_NUM_STATES = 8;
+static constexpr int ERTS_JIT_UTF8_ERROR_STATE = 7;
+static constexpr int ERTS_JIT_UTF8_HEADER_FIRST = 0b11000010;
+static constexpr int ERTS_JIT_UTF8_HEADER_LAST = 0b11110100;
 
 /*
- * ARG1 = pointer to match state
- * ARG2 = position in binary in bits
- * RETd = 4 bytes read from the binary in big-endian order
+ * RETd = first byte in a multi-byte sequence
+ * ARG2d = the number of bits we've consumed, always 8 at this point.
+ * ARG3d = the entire multi-byte sequence in little-endian
  *
- * On successful return, the extracted code point is in RET, the
- * position in the match state has been updated, and the ZF is clear.
- * On failure, the ZF is set.
- */
+ * Returns untagged code point in RETd, and the number of consumed bits in
+ * ARG2d.
+ *
+ * Error is indicated by ZF. */
 void BeamGlobalAssembler::emit_bs_get_utf8_shared() {
-    Label error = a.newLabel();
+    /* This is a finite-state decoder for UTF-8 that uses lookup tables to
+     * decide the next step. It's largely inspired by Bjoern Hoehrmann's
+     * decoder[0], but has a different arrangement that is better optimized for
+     * modern x86 processors.
+     *
+     * [0]: http://bjoern.hoehrmann.de/utf-8/decoder/dfa/, see COPYRIGHT file
+     * for the license notice. */
+    char transitions[ERTS_JIT_UTF8_NUM_RANGES * ERTS_JIT_UTF8_NUM_STATES];
+    char initial_states[1 << CHAR_BIT];
 
-    x86::Gp shift_q = ARG4, shift_d = ARG4d, shift_b = ARG4.r8();
-    x86::Gp original_value_d = RETd;
+    Label tables = a.newLabel();
 
-    x86::Gp byte_count_q = ARG2, byte_count_d = ARG2d;
-    x86::Gp extracted_value_d = ARG3d, extracted_value_b = ARG3.r8();
-    x86::Gp control_mask_d = ARG5d;
-    x86::Gp error_mask_d = ARG6d;
+    const x86::Gp codepoint_q = RET, codepoint_d = RETd, codepoint_b = RETb;
+    const x86::Gp count_d = ARG2d;
+    const x86::Gp bitdata_d = ARG3d, bitdata_b = ARG3.r8();
+    const x86::Gp state_q = ARG4, state_d = ARG4d;
+    const x86::Gp tables_q = ARG5;
 
-    ASSERT(extracted_value_d != shift_d);
-    ASSERT(control_mask_d != shift_d);
-    ASSERT(error_mask_d != shift_d);
-    ASSERT(byte_count_d != shift_d);
+    emit_enter_frame();
+
+    /* RIP-relative addressing doesn't allow index registers, so we have to
+     * load the table address into a register. */
+    a.lea(tables_q, x86::qword_ptr(tables));
+    a.shr(bitdata_d, imm(8));
+
+    /* Read the initial state from the table. The states have been arranged so
+     * that their ordinal is the number of bits from the header byte we wish to
+     * keep in the code point. */
+    if (hasCpuFeature(CpuFeatures::X86::kBMI2)) {
+        /* The initial state table is off by -128 since we'll never enter here
+         * with ASCII. */
+        a.movzx(state_d, x86::byte_ptr(tables_q, codepoint_q, 0, -128));
+        a.bzhi(codepoint_d, codepoint_d, state_d);
+    } else {
+        /* Dance around RCX by using count_d as a scratch register. We know
+         * it's always 8 at this point. */
+        mov_imm(x86::ecx, 8);
+        a.movzx(count_d, x86::byte_ptr(tables_q, codepoint_q, 0, -128));
+        a.sub(x86::ecx, count_d);
+        a.shl(codepoint_b, x86::cl);
+        a.shr(codepoint_b, x86::cl);
+
+        a.mov(state_d, count_d);
+        mov_imm(count_d, 8);
+    }
+
+    /* Initial states aren't premultiplied since we want them to be useful for
+     * clearing insignificant bits. Shift it into place before using it for the
+     * next transition. */
+    a.shl(state_d, imm(ERTS_JIT_UTF8_RANGE_SHIFT));
+
+    Label loop = a.newLabel();
+    a.bind(loop);
+    {
+        const x86::Gp byte_q = ARG1, byte_d = ARG1d;
+        Label success = a.newLabel();
+
+        a.add(count_d, imm(8));
+        a.movzx(byte_d, bitdata_b);
+
+        /* This is equivalent to:
+         *
+         * codepoint_d = (codepoint_d << 6) | (byte_d & 0x3F)
+         *
+         * ... but without wasting a precious register for masking. Note that
+         * rotation retains all the bits in `byte_q`. */
+        a.rol(byte_q, imm(64 - 6));
+        a.shld(codepoint_q, byte_q, imm(6));
+
+        /* Figure out the table index: rotate the header bits into place, and
+         * then discard the rotated-out bits by doing the addition in 32 bits,
+         * effectively turning it into a shift. */
+        const auto &range_q = byte_q, range_d = byte_d;
+        a.ror(range_q, imm(64 - 6 + ERTS_JIT_UTF8_RANGE_SHIFT));
+        a.add(state_d, range_d);
+
+        a.movsx(state_d, x86::byte_ptr(tables_q, state_q, 0, 128));
+        a.test(state_d, state_d);
+        a.short_().js(success);
+
+        /* Process next bytes, failing once we've run out of data. */
+        a.shr(bitdata_d, imm(8));
+        a.short_().jnz(loop);
+
+        a.bind(success);
+        {
+            /* ZF is always clear on success (state_d signed), and set on
+             * failure (bitdata_d zero). */
+            emit_leave_frame();
+            a.ret();
+        }
+    }
 
     /* UTF-8 has the following layout, where 'x' are data bits:
      *
@@ -1178,135 +1135,144 @@ void BeamGlobalAssembler::emit_bs_get_utf8_shared() {
      * 3 bytes: 1110xxxx, 10xxxxxx 10xxxxxx
      * 4 bytes: 11110xxx, 10xxxxxx 10xxxxxx 10xxxxxx
      *
-     * Note that the number of leading bits is equal to the number of bytes,
-     * which makes it very easy to create masks for extraction and error
-     * checking. */
-
-    /* The PEXT instruction has poor latency on some processors, so we try to
-     * hide that by extracting early on. Should this be a problem, it's not
-     * much slower to hand-roll it with shifts or BEXTR.
+     * When we encounter a header, we'll enter a state that handles the
+     * appropriate number of bytes. For example, if we see a header like
+     * `1110xxxx` we'll enter the three-byte decoding state and follow it until
+     * we're done.
      *
-     * The mask covers data bits from all variants. This includes the 23rd bit
-     * to support the 2-byte case, which is set on all well-formed 4-byte
-     * codepoints, so it must be cleared before range testing .*/
-    a.mov(extracted_value_d, imm(0x1F3F3F3F));
-    a.pext(extracted_value_d, original_value_d, extracted_value_d);
-
-    /* Preserve current match buffer and bit offset. */
-    a.push(ARG1);
-    a.push(ARG2);
-
-    /* Byte count = leading bit count. */
-    a.mov(byte_count_d, original_value_d);
-    a.not_(byte_count_d);
-    a.lzcnt(byte_count_d, byte_count_d);
-
-    /* Mask shift = (4 - byte count) * 8 */
-    a.mov(shift_d, imm(4));
-    a.sub(shift_d, byte_count_d);
-    a.lea(shift_d, x86::qword_ptr(0, shift_q, 3));
-
-    /* Shift the original value and masks into place. */
-    a.shrx(original_value_d, original_value_d, shift_d);
-
-    /* Matches the '10xxxxxx' components, leaving the header byte alone. */
-    a.mov(control_mask_d, imm(0x00C0C0C0));
-    a.shrx(control_mask_d, control_mask_d, shift_d);
-    a.mov(error_mask_d, imm(0x00808080));
-    a.shrx(error_mask_d, error_mask_d, shift_d);
-
-    /* Extracted value shift = (4 - byte count) * 6, as the leading '10' on
-     * every byte has been removed through PEXT.
+     * To avoid having complicated checks in the code we'll let the transition
+     * table go to an error state by default, and only add transitions for
+     * legal values.
      *
-     * We calculate the shift here to avoid depending on byte_count_d later on
-     * when it may have changed. */
-    a.mov(shift_d, imm(4));
-    a.sub(shift_d, byte_count_d);
-    a.add(shift_d, shift_d);
-    a.lea(shift_d, x86::qword_ptr(shift_q, shift_q, 1));
-
-    /* Assert that the header bits of each '10xxxxxx' component is correct,
-     * signalling errors by trashing the byte count with a guaranteed-illegal
-     * value. */
-    a.and_(original_value_d, control_mask_d);
-    a.cmp(original_value_d, error_mask_d);
-    a.cmovne(byte_count_d, error_mask_d);
-
-    /* Shift the extracted value into place. */
-    a.shrx(RETd, extracted_value_d, shift_d);
-
-    /* The extraction mask is a bit too wide, see above for details. */
-    a.and_(RETd, imm(~(1 << 22)));
-
-    /* Check for too large code point. */
-    a.cmp(RETd, imm(0x10FFFF));
-    a.cmova(byte_count_d, error_mask_d);
-
-    /* Check for the illegal range 16#D800 - 16#DFFF. */
-    a.mov(shift_d, RETd);
-    a.and_(shift_d, imm(-0x800));
-    a.cmp(shift_d, imm(0xD800));
-    a.cmove(byte_count_d, error_mask_d);
-
-    /* Test for overlong UTF-8 sequence. That can be done by testing
-     * that the bits marked y below are all zero.
+     * That is, we'll avoid adding transitions for values that go above the
+     * maximum of 16#10FFFF or land in the surrogate range 16#D800 - 16#DFFF,
+     * as well as "overlong" values that could have been expressed in a shorter
+     * form. Overlong values are of the form below where all `y` bits are 0:
      *
      * 1 byte:  0xxxxxxx (not handled by this path)
      * 2 bytes: 110yyyyx, 10xxxxxx
      * 3 bytes: 1110yyyy, 10yxxxxx 10xxxxxx
-     * 4 bytes: 11110yyy, 10yyxxxx 10xxxxxx 10xxxxxx
-     *
-     * 1 byte:                   xx'xxxxx
-     * 2 bytes:             y'yyyxx'xxxxx
-     * 3 bytes:       y'yyyyx'xxxxx'xxxxx
-     * 4 bytes: y'yyyyx'xxxxx'xxxxx'xxxxx
-     *
-     * The y bits can be isolated by shifting down by the number of bits
-     * shown in this table:
-     *
-     * 2:  7    (byte_count * 4 - 1)
-     * 3: 11    (byte_count * 4 - 1)
-     * 4: 16    (byte_count * 4)
-     */
+     * 4 bytes: 11110yyy, 10yyxxxx 10xxxxxx 10xxxxxx */
 
-    /* Calculate number of bits to shift. */
-    a.lea(shift_d, x86::qword_ptr(0, byte_count_q, 2));
-    a.cmp(byte_count_d, imm(4));
-    a.setne(extracted_value_b);
-    a.sub(shift_b, extracted_value_b);
-    a.movzx(shift_q, shift_b);
+    sys_memset(initial_states,
+               ERTS_JIT_UTF8_ERROR_STATE, /* Not pre-multipled! */
+               sizeof(initial_states));
+    sys_memset(transitions,
+               ERTS_JIT_UTF8_ERROR_STATE * ERTS_JIT_UTF8_NUM_RANGES,
+               sizeof(transitions));
 
-    /* Now isolate the y bits and compare to zero. */
-    a.shrx(extracted_value_d, RETd, shift_d);
-    a.test(extracted_value_d, extracted_value_d);
-    a.cmove(byte_count_d, error_mask_d);
-
-    /* Restore current bit offset and match buffer. */
-    ASSERT(ARG1 != byte_count_q && ARG3 != byte_count_q);
-    a.pop(ARG3);
-    a.pop(ARG1);
-
-    /* Advance our current position. */
-    a.lea(ARG3, x86::qword_ptr(ARG3, byte_count_q, 3));
-
-    /* Byte count must be 2, 3, or 4. */
-    a.sub(byte_count_d, imm(2));
-    a.cmp(byte_count_d, imm(2));
-    a.ja(error);
-
-    a.mov(x86::qword_ptr(ARG1, offsetof(ErlBinMatchBuffer, offset)), ARG3);
-
-    a.shl(RETd, imm(_TAG_IMMED1_SIZE));
-    a.or_(RETd, imm(_TAG_IMMED1_SMALL)); /* Always clears ZF. */
-
-    a.ret();
-
-    a.bind(error);
     {
-        /* Signal error by setting ZF. */
-        a.xor_(RET, RET);
-        a.ret();
+        /* Bytes that may appear first in a sequence are given state ordinals
+         * that correspond to the number of (least significant) bits that are
+         * part of the codepoint itself. */
+        for (auto i = ERTS_JIT_UTF8_HEADER_FIRST;
+             i <= ERTS_JIT_UTF8_HEADER_LAST;
+             i++) {
+            auto leading_bits = Support::clz((Uint32)(~i & 0xFF));
+            initial_states[i] = (32 - leading_bits);
+        }
+
+        /* We need to keep these header bytes apart from the others (see
+         * transition table below), so we them distinct ordinals that still
+         * keep the significant bits we need (a bit that is always 0 won't be
+         * changed when we clear it). */
+        initial_states[0b11100000] = 0;
+        initial_states[0b11101101] = 4;
+        initial_states[0b11110000] = 1;
+        initial_states[0b11110001] = 2;
+        initial_states[0b11110010] = 2;
+        initial_states[0b11110011] = 2;
+        initial_states[0b11110100] = 3;
     }
+
+    /* Helper function for adding transitions. When we encounter a header byte
+     * in the `from` range, we'll accept the next byte as long as it's within
+     * the given `range`, and transition to the state identified by the `to`
+     * range. This lets long sequences reuse the states of short ones. */
+    auto transition = [&](std::pair<int, int> &&from,
+                          std::pair<int, int> &&range,
+                          std::pair<int, int> &&to) {
+        ASSERT(from.first >= ERTS_JIT_UTF8_HEADER_FIRST &&
+               from.second <= ERTS_JIT_UTF8_HEADER_LAST);
+        ASSERT((to.first >= ERTS_JIT_UTF8_HEADER_FIRST &&
+                to.second <= ERTS_JIT_UTF8_HEADER_LAST) ||
+               (to.first == -1 && to.second == -1));
+
+        /* We've compressed the ranges into increments of 16 to save space in
+         * the table. Make sure we don't try anything narrower than that. */
+        ASSERT(range.second > range.first &&
+               !((range.second - range.first + 1) %
+                 (1 << ERTS_JIT_UTF8_RANGE_SHIFT)));
+
+        /* All transitions must go from one distinct state to another. */
+        ASSERT(initial_states[from.first] == initial_states[from.second]);
+        ASSERT(initial_states[from.first - 1] != initial_states[from.first]);
+        ASSERT(initial_states[from.second + 1] != initial_states[from.second]);
+
+        int from_premul, to_premul;
+
+        from_premul = initial_states[from.first] << ERTS_JIT_UTF8_RANGE_SHIFT;
+        if (to.first >= 0) {
+            ASSERT(initial_states[to.first] == initial_states[to.second]);
+            ASSERT(initial_states[to.first - 1] != initial_states[to.first]);
+            ASSERT(initial_states[to.second + 1] != initial_states[to.first]);
+
+            to_premul = initial_states[to.first] << ERTS_JIT_UTF8_RANGE_SHIFT;
+        } else {
+            /* Special-case to signal success. -1 is cheaper than 0 for
+             * distinguishing success from failure, see the multi-byte loop for
+             * details. */
+            to_premul = -1;
+        }
+
+        ASSERT(from_premul < sizeof(transitions));
+        ASSERT(to_premul < sizeof(transitions));
+
+        for (auto i = (range.first >> ERTS_JIT_UTF8_RANGE_SHIFT);
+             i <= (range.second >> ERTS_JIT_UTF8_RANGE_SHIFT);
+             i++) {
+            transitions[from_premul + i] = to_premul;
+        }
+    };
+
+    /* General 2-byte case. */
+    transition({0b11000010, 0b11011111}, /* 110yyyyx with at least one y */
+               {0b10000000, 0b10111111}, /* 10xxxxxx, all values legal */
+               {-1, -1});                /* Success! */
+
+    /* General 3-byte case. */
+    transition({0b11100001, 0b11101100},  /* 1110yyyy with at least one y */
+               {0b10000000, 0b10111111},  /* 10xxxxxx, all values legal */
+               {0b11000010, 0b11011111}); /* -> general 2-byte case. */
+
+    /* Specific 3-byte cases. */
+    transition({0b11100000, 0b11100000},  /* 1110yyyy where y is 0 */
+               {0b10100000, 0b10111111},  /* 10yxxxxx where y is 1 */
+               {0b11000010, 0b11011111}); /* -> general 2-byte case. */
+    transition({0b11101101, 0b11101101},  /* 1110yyyy with at least one y */
+               {0b10000000, 0b10011111},  /* Surrogate when >0b10011111 */
+               {0b11000010, 0b11011111}); /* -> general 2-byte case. */
+    transition({0b11101110, 0b11101111},  /* 1110yyyy with at least one y */
+               {0b10000000, 0b10111111},  /* 10xxxxxx, all values legal */
+               {0b11000010, 0b11011111}); /* -> general 2-byte case. */
+
+    /* Four-byte cases. */
+    transition({0b11110000, 0b11110000},  /* 11110yyy where y is 0 */
+               {0b10010000, 0b10111111},  /* 10yyxxxx with at least one y */
+               {0b11100001, 0b11101100}); /* -> general 3-byte case. */
+    transition({0b11110001, 0b11110011},  /* 11110yyy with at least one y */
+               {0b10000000, 0b10111111},  /* 10xxxxxx, all values legal */
+               {0b11100001, 0b11101100}); /* -> general 3-byte case. */
+    transition({0b11110100, 0b11110100},  /* 11110yyy with at least one y */
+               {0b10000000, 0b10001111},  /* Above 0x10FFFF when >0b10001111 */
+               {0b11100001, 0b11101100}); /* -> general 3-byte case. */
+
+    /* We don't need to keep initial state mappings for ASCII since we're
+     * skipping this path altogether in that case. */
+    a.bind(tables);
+    a.embed(&initial_states[sizeof(initial_states) / 2],
+            sizeof(initial_states) / 2);
+    a.embed(transitions, sizeof(transitions));
 }
 
 void BeamModuleAssembler::emit_bs_get_utf8(const ArgRegister &Ctx,
@@ -1315,62 +1281,85 @@ void BeamModuleAssembler::emit_bs_get_utf8(const ArgRegister &Ctx,
     const int position_offset = offsetof(ErlBinMatchBuffer, offset);
     const int size_offset = offsetof(ErlBinMatchBuffer, size);
 
-    const x86::Gp ctx = ARG1;
-    const x86::Gp bin_position = ARG2;
-    const x86::Gp bin_base = ARG3;
+    const x86::Gp bitdata_q = ARG3, bitdata_d = ARG3d, bitdata_b = ARG3.r8();
+    const x86::Gp match_buffer = ARG6;
 
-    Label multi_byte = a.newLabel(), fallback = a.newLabel(),
-          check = a.newLabel(), done = a.newLabel();
+    {
+        const x86::Gp binary_remainder_q = ARG2, binary_remainder_d = ARG2d;
+        const x86::Gp binary_position_q = x86::rcx, binary_position_b = x86::cl;
+        const x86::Gp binary_base_q = ARG3;
 
-    mov_arg(ctx, Ctx);
-    a.lea(ctx, emit_boxed_val(ARG1, offsetof(ErlBinMatchState, mb)));
+        Label aligned = a.newLabel();
 
-    a.mov(bin_position, x86::qword_ptr(ctx, position_offset));
-    a.mov(RET, x86::qword_ptr(ctx, size_offset));
-    a.mov(bin_base, x86::qword_ptr(ctx, base_offset));
-    a.sub(RET, bin_position);
-    a.cmp(RET, imm(32));
-    a.short_().jb(fallback);
+        mov_arg(match_buffer, Ctx);
+        a.lea(match_buffer,
+              emit_boxed_val(match_buffer, offsetof(ErlBinMatchState, mb)));
 
-    a.test(bin_position, imm(7));
-    a.short_().jnz(fallback);
+        a.mov(binary_base_q, x86::qword_ptr(match_buffer, base_offset));
+        a.mov(binary_position_q, x86::qword_ptr(match_buffer, position_offset));
+        a.mov(binary_remainder_q, x86::qword_ptr(match_buffer, size_offset));
+        a.sub(binary_remainder_q, binary_position_q);
+        a.and_(binary_remainder_q, imm(~7));
+        a.jz(resolve_beam_label(Fail));
 
-    /* We're byte-aligned and can read at least 32 bits. */
-    a.mov(RET, bin_position);
-    a.shr(RET, 3);
+        /* FIXME: `enif_make_resource_binary` kills the possibility of safely
+         * reading past the end of a binary, as the binary data points to a
+         * user-controlled buffer that we cannot pad. We need to handle short
+         * buffers somehow. */
 
-    /* The most significant bits come first, so we'll read the the next four
-     * bytes as big-endian so we won't have to reorder them later. */
-    if (hasCpuFeature(CpuFeatures::X86::kMOVBE)) {
-        a.movbe(RETd, x86::dword_ptr(bin_base, RET));
-    } else {
-        a.mov(RETd, x86::dword_ptr(bin_base, RET));
-        a.bswap(RETd);
+        a.mov(RET, binary_position_q);
+        a.shr(RET, imm(3));
+        a.mov(bitdata_q, x86::qword_ptr(binary_base_q, RET));
+
+        a.and_(binary_position_q, imm(7));
+        a.short_().jz(aligned);
+        {
+            /* Align the codepoint. This has to be done in big-endian to
+             * preserve the bit order. Note that we don't use MOVBE when
+             * available since it tends to slow down the aligned case. */
+            a.bswap(bitdata_q);
+            a.shl(bitdata_q, binary_position_b);
+            a.bswap(bitdata_q);
+        }
+        a.bind(aligned);
+
+        /* Clear all the bits we aren't supposed to see. Note that
+         * `binary_remainder_q` is a truncated multiple of 8 bits at this
+         * point, so we don't have to worry about trailing bits. */
+        ASSERT(bitdata_q != x86::rcx && binary_remainder_q != x86::rcx);
+        mov_imm(x86::rcx, 32);
+        a.cmp(binary_remainder_q, imm(32));
+        a.cmova(binary_remainder_q, x86::rcx);
+
+        if (hasCpuFeature(CpuFeatures::X86::kBMI2)) {
+            a.bzhi(bitdata_d, bitdata_d, binary_remainder_d);
+        } else {
+            a.sub(x86::ecx, binary_remainder_d);
+            a.shl(bitdata_d, x86::cl);
+            a.shr(bitdata_d, x86::cl);
+        }
     }
-    a.test(RETd, RETd);
-    a.short_().js(multi_byte);
 
-    /* Handle plain old ASCII (code point < 128). */
-    a.add(x86::qword_ptr(ctx, position_offset), imm(8));
-    a.shr(RETd, imm(24 - _TAG_IMMED1_SIZE));
-    a.or_(RETd, imm(_TAG_IMMED1_SMALL));
-    a.short_().jmp(done);
+    Label success = a.newLabel();
 
-    a.bind(multi_byte);
+    const x86::Gp codepoint_d = RETd, codepoint_b = RETb;
+    const x86::Gp count_q = ARG2, count_d = ARG2d;
 
-    if (BeamAssembler::hasCpuFeature(CpuFeatures::X86::kBMI2)) {
-        /* This CPU supports the PEXT and SHRX instructions. */
-        safe_fragment_call(ga->get_bs_get_utf8_shared());
-        a.short_().jmp(check);
-    }
+    mov_imm(count_d, 8);
 
-    a.bind(fallback);
-    safe_fragment_call(ga->get_bs_get_utf8_short_shared());
+    /* Grab the first code point and exit quickly if ASCII. */
+    a.movzx(codepoint_d, bitdata_b);
+    a.test(codepoint_b, codepoint_b);
+    a.short_().jns(success);
 
-    a.bind(check);
-    a.je(resolve_beam_label(Fail));
+    safe_fragment_call(ga->get_bs_get_utf8_shared());
+    a.jz(resolve_beam_label(Fail));
 
-    a.bind(done);
+    a.bind(success);
+    a.add(x86::qword_ptr(match_buffer, position_offset), count_q);
+
+    a.shl(codepoint_d, imm(_TAG_IMMED1_SIZE));
+    a.or_(codepoint_d, imm(_TAG_IMMED1_SMALL));
 }
 
 void BeamModuleAssembler::emit_i_bs_get_utf8(const ArgRegister &Ctx,
