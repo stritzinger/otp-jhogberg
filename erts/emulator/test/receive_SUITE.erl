@@ -29,7 +29,8 @@
          receive_opt_exception/1,receive_opt_recursion/1,
          receive_opt_deferred_save/1,
          erl_1199/1, multi_recv_opt/1,
-	 multi_recv_opt_clear/1]).
+         multi_recv_opt_clear/1,
+         recv_marker_reserve/1]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -42,7 +43,8 @@ all() ->
      receive_opt_recursion,
      receive_opt_deferred_save,
      erl_1199, multi_recv_opt,
-     multi_recv_opt_clear].
+     multi_recv_opt_clear,
+     recv_marker_reserve].
 
 init_per_testcase(receive_opt_deferred_save, Config) ->
     case erlang:system_info(schedulers_online) of
@@ -526,7 +528,45 @@ multi_call_clear(Srv) ->
 	   end,
     multi_call(Srv, 1000, one, 100, true, Fun2).
 
-    
+%% ERIERL-905: The `recv_marker_reserve` instruction didn't update heap/stack
+%% pointers despite allocating memory after a per-process counter goes beyond
+%% MAX_SMALL.
+recv_marker_reserve(Config) when is_list(Config) ->
+    Retries = 500,
+    {MinSmall, MaxSmall} = determine_small_limits(0),
+    Counter = -MinSmall + MaxSmall - Retries,
+
+    DummyRef = make_ref(),
+    self() ! DummyRef,
+
+    erts_debug:set_internal_state(available_internal_state, true),
+    erts_debug:set_internal_state(process_uniq_counter, Counter),
+    recv_marker_reserve_retry(Retries * 2),
+    erts_debug:set_internal_state(available_internal_state, false),
+
+    receive
+        DummyRef -> ok
+    end.
+
+recv_marker_reserve_retry(0) ->
+    ok;
+recv_marker_reserve_retry(N) ->
+    Ref = monitor(process, self(), [{alias,demonitor}]),
+    self() ! Ref,
+    receive
+        Ref -> erlang:demonitor(Ref, [flush])
+    end,
+    recv_marker_reserve_retry(N - 1).
+
+determine_small_limits(N) ->
+    case is_small(-1 bsl N) of
+        true -> determine_small_limits(N + 1);
+        false -> {-1 bsl (N - 1), (1 bsl (N - 1)) - 1}
+    end.
+
+is_small(N) when is_integer(N) ->
+    0 =:= erts_debug:flat_size(N).
+
 
 %%%
 %%% Common helpers.
