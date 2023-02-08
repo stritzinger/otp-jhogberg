@@ -117,6 +117,8 @@ obsolete(zlib, inflateChunk, 2) ->
     {deprecated, "use safeInflate/2 instead", "OTP 27"};
 obsolete(zlib, setBufSize, 2) ->
     {deprecated, "this function will be removed in a future release", "OTP 27"};
+obsolete(erl_eval, eval_str, 1) ->
+    {internal, "see the documentation for details"};
 obsolete(core_lib, get_anno, 1) ->
     {removed, "use cerl:get_ann/1 instead"};
 obsolete(core_lib, is_literal, 1) ->
@@ -241,6 +243,10 @@ obsolete(random, _, _) ->
     {deprecated, "use the 'rand' module instead"};
 obsolete(slave, _, _) ->
     {deprecated, "use the 'peer' module instead", "OTP 27"};
+obsolete(erts_debug, _, _) ->
+    {internal, "see the documentation for details"};
+obsolete(erts_internal, _, _) ->
+    {internal, "see the documentation for details"};
 obsolete(os_mon_mib, _, _) ->
     {removed, "this module was removed in OTP 22.0"};
 obsolete(pg2, _, _) ->
