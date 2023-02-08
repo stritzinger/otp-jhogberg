@@ -112,6 +112,8 @@ ifeq ($(ERL_DETERMINISTIC),yes)
   XRL_FLAGS += +deterministic
 endif
 
+ERL_COMPILE_FLAGS += +allow_internal_otp_functionality
+
 ERLC_WFLAGS = -W
 ERLC = erlc $(ERLC_WFLAGS) $(ERLC_FLAGS)
 ERL = erl -boot start_clean

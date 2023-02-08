@@ -92,6 +92,14 @@ summarize_attributes([{removed_type, Rs} | As], Module, Acc0) ->
     Ts = sa_1(Rs, removed, Module, Acc0#st.types),
     Acc = Acc0#st{ types = Ts },
     summarize_attributes(As, Module, Acc);
+summarize_attributes([{internal, Ds} | As], Module, Acc0) ->
+    Fs = sa_1(Ds, internal, Module, Acc0#st.functions),
+    Acc = Acc0#st{ functions = Fs },
+    summarize_attributes(As, Module, Acc);
+summarize_attributes([{internal_type, Ds} | As], Module, Acc0) ->
+    Ts = sa_1(Ds, internal, Module, Acc0#st.types),
+    Acc = Acc0#st{ types = Ts },
+    summarize_attributes(As, Module, Acc);
 summarize_attributes([_ | As], Module, Acc) ->
     summarize_attributes(As, Module, Acc);
 summarize_attributes([], _Module, Acc) ->
@@ -367,7 +375,11 @@ deprecation_file(Root) ->
     filename:join(Root, "system/doc/general_info/DEPRECATIONS").
 
 in_deprecations({Tag,M,F,A,_}, Depr) when Tag =:= deprecated; Tag =:= removed ->
-    is_map_key({M,F,A}, Depr).
+    is_map_key({M,F,A}, Depr);
+in_deprecations({internal,_M,_F,_A,_}, _Depr) ->
+    %% -internal() attributes don't need to be cross-checked, simplify the rest
+    %% of the code by saying they're present in the DEPRECATIONS file.
+    true.
 
 parse_deprecations([<<"#",_/binary>>|Lines]) ->
     parse_deprecations(Lines);

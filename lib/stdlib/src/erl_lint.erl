@@ -229,6 +229,11 @@ format_error({invalid_deprecated,D}) ->
 format_error({bad_deprecated,{F,A}}) ->
     io_lib:format("deprecated function ~tw/~w undefined or not exported",
                   [F,A]);
+format_error({invalid_internal,D}) ->
+        io_lib:format("badly formed internal attribute ~tw", [D]);
+format_error({bad_internal,{F,A}}) ->
+        io_lib:format("internal function ~tw/~w undefined or not exported",
+                      [F,A]);
 format_error({invalid_removed,D}) ->
     io_lib:format("badly formed removed attribute ~tw", [D]);
 format_error({bad_removed,{F,A}}) when F =:= '_'; A =:= '_' ->
@@ -296,6 +301,14 @@ format_error({deprecated_type, {M1, F1, A1}, String, Rel}) ->
 format_error({deprecated_type, {M1, F1, A1}, String}) when is_list(String) ->
     io_lib:format("the type ~p:~p~s is deprecated; ~s",
                   [M1, F1, gen_type_paren(A1), String]);
+format_error({internal, MFA, String}) when is_list(String) ->
+    io_lib:format("~s is internal and cannot be used outside of OTP. If you "
+                  "need this functionality, please send us a feature request "
+                  "with a good explanation on why you need this.",
+                  [format_mfa(MFA)]);
+format_error({internal_type, {M1, F1, A1}, String}) when is_list(String) ->
+    io_lib:format("the type ~p:~p~s is internal and cannot be used "
+                  "outside of OTP", [M1, F1, gen_type_paren(A1)]);
 format_error({removed, MFA, ReplacementMFA, Rel}) ->
     io_lib:format("call to ~s will fail, since it was removed in ~s; "
 		  "use ~s", [format_mfa(MFA), Rel, format_mfa(ReplacementMFA)]);
@@ -649,6 +662,10 @@ start(File, Opts) ->
 	 {deprecated_type,
 	  bool_option(warn_deprecated_type, nowarn_deprecated_type,
 		      true, Opts)},
+         {internal_otp_functionality,
+          bool_option(disallow_internal_otp_functionality,
+                      allow_internal_otp_functionality,
+                      true, Opts)},
          {obsolete_guard,
           bool_option(warn_obsolete_guard, nowarn_obsolete_guard,
                       true, Opts)},
@@ -1014,7 +1031,8 @@ post_traversal_check(Forms, St0) ->
     StG = check_dialyzer_attribute(Forms, StF),
     StH = check_callback_information(StG),
     StI = check_nifs(Forms, StH),
-    check_removed(Forms, StI).
+    StJ = check_removed(Forms, StI),
+    check_internal(Forms, StJ).
 
 %% check_behaviour(State0) -> State
 %% Check that the behaviour attribute is valid.
@@ -1224,6 +1242,50 @@ removed_fa(F, A, _X, _Mod) ->
 removed_desc([Char | Str]) when is_integer(Char) -> removed_desc(Str);
 removed_desc([]) -> true;
 removed_desc(_) -> false.
+
+%% check_internal(Forms, State0) -> State
+
+check_internal(Forms, St0) ->
+    Exports = exports(St0),
+    X = ignore_predefined_funcs(gb_sets:to_list(Exports)),
+    #lint{module = Mod} = St0,
+    Bad = [{E,Anno} || {attribute, Anno, internal, internal} <- Forms,
+                    R <- lists:flatten([internal]),
+                    E <- internal_cat(R, X, Mod)],
+    foldl(fun ({E,Anno}, St1) ->
+                  add_error(Anno, E, St1)
+          end, St0, Bad).
+
+internal_cat({F, A}, X, Mod) ->
+    internal_fa(F, A, X, Mod);
+internal_cat(module, X, Mod) ->
+    internal_fa('_', '_', X, Mod);
+internal_cat(R, _X, _Mod) ->
+    [{invalid_internal,R}].
+
+internal_fa('_', '_', X, _Mod) ->
+    case X of
+        [_|_] -> [{bad_internal,{'_','_'}}];
+        [] -> []
+    end;
+internal_fa(F, '_', X, _Mod) when is_atom(F) ->
+    %% Don't use this syntax for built-in functions.
+    case lists:filter(fun({F1,_}) -> F1 =:= F end, X) of
+        [_|_] -> [{bad_internal,{F,'_'}}];
+        _ -> []
+    end;
+internal_fa(F, A, X, Mod) when is_atom(F), is_integer(A), A >= 0 ->
+    case lists:member({F,A}, X) of
+        true ->
+            [{bad_internal,{F,A}}];
+        false ->
+            case erlang:is_builtin(Mod, F, A) of
+                true -> [{bad_internal,{F,A}}];
+                false -> []
+            end
+    end;
+internal_fa(F, A, _X, _Mod) ->
+    [{invalid_internal,{F,A}}].
 
 %% Ignores functions added by erl_internal:add_predefined_functions/1
 ignore_predefined_funcs([{behaviour_info,1} | Fs]) ->
@@ -4094,6 +4156,13 @@ deprecated_function(Anno, M, F, As, St) ->
                 false ->
 		    add_warning(Anno, {deprecated, MFA, Replacement, Rel}, St)
             end;
+        {internal, String} when is_list(String) ->
+            case is_warn_enabled(internal_otp_functionality, St) of
+                true ->
+                    add_error(Anno, {internal, MFA, String}, St);
+                false ->
+                    St
+            end;
 	{removed, String} when is_list(String) ->
 	    add_removed_warning(Anno, MFA, {removed, MFA, String}, St);
 	{removed, Replacement, Rel} ->
@@ -4121,6 +4190,13 @@ deprecated_type(Anno, M, N, As, St) ->
             case is_warn_enabled(deprecated_type, St) of
                 true ->
                     add_warning(Anno, {deprecated_type, {M,N,NAs}, String}, St);
+                false ->
+                    St
+            end;
+        {internal, String} ->
+            case is_warn_enabled(internal_otp_functionality, St) of
+                true ->
+                    add_error(Anno, {internal_type, {M,N,NAs}, String}, St);
                 false ->
                     St
             end;
