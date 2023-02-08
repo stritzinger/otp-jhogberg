@@ -37,6 +37,8 @@
 
 -export_type([binding_struct/0]).
 
+-internal([eval_str/1]).
+
 -type(expression() :: erl_parse:abstract_expr()).
 -type(expressions() :: [erl_parse:abstract_expr()]).
 -type(expression_list() :: [expression()]).
@@ -1706,7 +1708,7 @@ ev_expr({cons,_,H,T}) -> [ev_expr(H) | ev_expr(T)].
 -define(result(F,D), lists:flatten(io_lib:format(F, D))).
 
 -spec eval_str(string() | unicode:latin1_binary()) ->
-                      {'ok', string()} | {'error', string()}.
+                      {'ok', term()} | {'error', string()}.
 
 eval_str(Str) when is_list(Str) ->
     case erl_scan:tokens([], Str, 0) of
