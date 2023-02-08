@@ -195,7 +195,7 @@ RELSYSDIR = $(RELEASE_PATH)/emulator_test
 # FLAGS
 # ----------------------------------------------------
 ERL_MAKE_FLAGS += 
-ERL_COMPILE_FLAGS := $(filter-out +deterministic,$($(ERL_COMPILE_FLAGS)))
+ERL_COMPILE_FLAGS := $(filter-out +deterministic,$(ERL_COMPILE_FLAGS))
 
 # ----------------------------------------------------
 # Targets
@@ -204,7 +204,7 @@ ERL_COMPILE_FLAGS := $(filter-out +deterministic,$($(ERL_COMPILE_FLAGS)))
 make_emakefile: $(NO_OPT_ERL_FILES) $(NATIVE_ERL_FILES) \
   $(KERNEL_ERL_FILES) $(R25_ERL_FILES)
 	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) +compressed -o$(EBIN) \
-	$(MODULES) $(KERNEL_MODULES) >> $(EMAKEFILE)
+	$(MODULES) $(KERNEL_MODULES) > $(EMAKEFILE)
 	$(ERL_TOP)/make/make_emakefile +no_copt +no_postopt +no_ssa_opt +no_bsm_opt \
         $(ERL_COMPILE_FLAGS) -o$(EBIN) $(NO_OPT_MODULES) >> $(EMAKEFILE)
 	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) \
