@@ -28,6 +28,7 @@
 %%
 
 -module(erts_internal).
+-internal(module).
 
 -export([await_port_send_result/3]).
 -export([cmp_term/2]).
