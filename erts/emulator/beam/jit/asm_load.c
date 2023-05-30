@@ -1010,6 +1010,46 @@ void beam_load_finalize_code(LoaderState *stp,
                 erts_refc_inc(&fun_entry->refc, 2);
             }
 
+            /* FIXME: `#ifdef DEBUG` in case this test turns out to be
+             * fruitful. */
+            {
+                ErtsCodePtr address = beamasm_get_lambda(stp->ba, i);
+                const ErtsCodeMFA *mfa;
+
+                if (lambda->num_free > 0) {
+                    /* Funs with an environment have a trampoline to load said
+                     * environment right after the code that implements the
+                     * fun.
+                     *
+                     * Find the MFA using brute force since the range update
+                     * hasn't been committed yet. */
+                    const ErtsCodeInfo * const *fs;
+                    UWord as_word = (UWord)address;
+
+                    fs = (inst_p->code_hdr)->functions;
+                    mfa = NULL;
+
+                    for (Uint ix = 0;
+                         ix < (inst_p->code_hdr)->num_functions;
+                         ix++) {
+                        if (as_word > (UWord)fs[ix]) {
+                            mfa = &fs[ix]->mfa;
+                        }
+                    }
+
+                    ERTS_ASSERT(mfa != NULL);
+                    ERTS_ASSERT(address != erts_codemfa_to_code(mfa));
+                } else {
+                    ERTS_ASSERT(erts_init_process_id == ERTS_INVALID_PID ||
+                                stp->lambda_literals[i] != ERTS_SWORD_MAX);
+                    mfa = erts_code_to_codemfa(address);
+                }
+
+                ERTS_ASSERT(mfa->module == stp->module);
+                ERTS_ASSERT(mfa->function == lambda->function);
+                ERTS_ASSERT(mfa->arity == lambda->arity);
+            }
+
             beamasm_patch_lambda(stp->ba, stp->writable_region, i, fun_entry);
         }
     }
