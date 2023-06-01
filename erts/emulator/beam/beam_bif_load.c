@@ -1951,7 +1951,7 @@ BIF_RETTYPE erts_internal_purge_module_2(BIF_ALIST_2)
                 /* Because fun calls always land in the latest instance, there
                  * is no need to set up purge markers if there's current code
                  * for this module. */
-                if (!modp->curr.code_hdr) {
+                if (1 || !modp->curr.code_hdr) {
                     /* Set up "pending purge" markers for the funs in this
                      * module. Processes trying to call these funs will be
                      * suspended _before_ calling them, which will then either
