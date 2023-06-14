@@ -1691,7 +1691,10 @@ kernel_passes() ->
      {iff,dssa,{listing,"ssa"}},
      {iff,ssalint,{pass,beam_ssa_lint}},
      {delay,
-      [{unless,no_bool_opt,{pass,beam_ssa_bool}},
+      [{unless,no_cons_opt,{pass,beam_ssa_constraints}},
+       {iff,dcons,{listing,"cons"}},
+
+       {unless,no_bool_opt,{pass,beam_ssa_bool}},
        {iff,dbool,{listing,"bool"}},
        {unless,no_bool_opt,{iff,ssalint,{pass,beam_ssa_lint}}},
 
@@ -1711,6 +1714,8 @@ kernel_passes() ->
        make_ssa_check_pass(post_ssa_opt),
        {iff,dssaopt,{listing,"ssaopt"}},
        {unless,no_ssa_opt,{iff,ssalint,{pass,beam_ssa_lint}}},
+
+       {iff,late_cons,{pass,beam_ssa_constraints}},
 
        {unless,no_throw_opt,{pass,beam_ssa_throw}},
        {iff,dthrow,{listing,"throw"}},
@@ -2991,6 +2996,7 @@ pre_load() ->
 	 beam_ssa_bool,
 	 beam_ssa_bsm,
 	 beam_ssa_codegen,
+	 beam_ssa_constraints,
 	 beam_ssa_dead,
          beam_ssa_destructive_update,
 	 beam_ssa_opt,

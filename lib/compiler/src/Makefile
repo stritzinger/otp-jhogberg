@@ -68,6 +68,7 @@ MODULES =  \
 	beam_ssa_bsm \
 	beam_ssa_check \
 	beam_ssa_codegen \
+	beam_ssa_constraints \
 	beam_ssa_dead \
 	beam_ssa_destructive_update \
 	beam_ssa_lint \
@@ -221,6 +222,7 @@ $(EBIN)/beam_ssa_bsm.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_bool.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_check.beam: beam_ssa.hrl beam_types.hrl
 $(EBIN)/beam_ssa_codegen.beam: beam_ssa.hrl beam_asm.hrl
+$(EBIN)/beam_ssa_constraints.beam: beam_ssa_opt.hrl beam_ssa.hrl beam_asm.hrl
 $(EBIN)/beam_ssa_dead.beam: beam_ssa.hrl
 $(EBIN)/beam_ssa_destructive_update.beam: beam_ssa_opt.hrl beam_types.hrl
 $(EBIN)/beam_ssa_lint.beam: beam_ssa.hrl

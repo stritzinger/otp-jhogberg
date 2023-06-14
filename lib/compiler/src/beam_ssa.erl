@@ -38,6 +38,7 @@
          merge_blocks/2,
          normalize/1,
          no_side_effect/1,
+         number/1,
          predecessors/1,
          rename_vars/3,
          rpo/1,rpo/2,
@@ -489,7 +490,7 @@ dominators(Labels, Blocks) when is_map(Blocks) ->
       Preds :: predecessor_map(),
       Result :: {dominator_map(), numbering_map()}.
 dominators_from_predecessors(Top0, Preds) when is_map(Preds) ->
-    Df = maps:from_list(number(Top0, 0)),
+    Df = number(Top0),
     [{0,[]}|Top] = [{L,map_get(L, Preds)} || L <- Top0],
 
     %% The flow graph for an Erlang function is reducible, and
@@ -877,9 +878,19 @@ dom_intersection_2([E1|Es1]=Set1, [_|Es2]=Set2, Df, Df2) ->
             Set1
     end.
 
+%% number(Order) -> NumberingMap
+%%  Builds a block numbering map ("block order") from the given traversal. This
+%%  can be used to cheaply check which of two blocks came first, assuming that
+%%  one dominates the other.
+-spec number(Order) -> numbering_map() when
+      Order :: [label()].
+number(Order) ->
+    maps:from_list(number(Order, 0)).
+
 number([L|Ls], N) ->
-    [{L,N}|number(Ls, N+1)];
-number([], _) -> [].
+    [{L,N} | number(Ls, N+1)];
+number([], _) ->
+    [].
 
 fold_blocks_1([L|Ls], Fun, Blocks, Acc0) ->
     Block = map_get(L, Blocks),
