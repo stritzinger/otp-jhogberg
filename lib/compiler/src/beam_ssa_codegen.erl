@@ -1075,7 +1075,8 @@ ensure_label(Fail0, #cg{ultimate_fail=Lbl}) ->
         {f,_}=Fail -> Fail
     end.
 
-cg_block([#cg_set{op=new_try_tag,dst=Tag,args=Args}], {Tag,Fail0}, St) ->
+cg_block([#cg_set{op=new_try_tag,dst=Tag,args=Args},
+          #cg_set{op=succeeded,dst=Bool,args=[Tag]}], {Bool,Fail0}, St) ->
     {catch_tag,Fail} = Fail0,
     [Reg,{atom,Kind}] = beam_args([Tag|Args], St),
     {[{Kind,Reg,Fail}],St};

@@ -1735,12 +1735,15 @@ opt_try(Linear, Count0) when is_list(Linear) ->
 %%     catch
 %%         ... snip ...
 %%     end.
-shrink_try([{TryLbl0, #b_blk{is=[#b_set{op=new_try_tag,dst=Dst}],
-                             last=#b_br{bool=Dst,succ=SuccLbl}}=TryBlk},
+shrink_try([{TryLbl0, #b_blk{is=[#b_set{op=new_try_tag,dst=TryTag},
+                                 #b_set{op={succeeded,body},
+                                        dst=Succ,
+                                        args=[TryTag]}],
+                             last=#b_br{bool=Succ,succ=SuccLbl}}=TryBlk},
             {SuccLbl, #b_blk{is=SuccIs0,last=SuccLast}=SuccBlk0} | Bs],
            Count0, Acc0) ->
     %% Hoist leading known-safe instructions before `new_try_tag` instructions.
-    {HoistIs, SuccIs} = hoist_try_is(SuccIs0, SuccLast, Dst, []),
+    {HoistIs, SuccIs} = hoist_try_is(SuccIs0, SuccLast, TryTag, []),
 
     HoistLbl = TryLbl0,
     TryLbl = Count0,
@@ -1822,7 +1825,8 @@ is_safe_sink_try(#b_set{op=Op}=I) ->
 %%
 %% the try/catch can be eliminated by simply removing the `new_try_tag`,
 %% `landingpad`, and `kill_try_tag` instructions.
-reduce_try([{L,#b_blk{is=[#b_set{op=new_try_tag}],
+reduce_try([{L,#b_blk{is=[#b_set{op=new_try_tag},
+                          #b_set{op={succeeded,body}}],
                       last=Last}=Blk0} | Bs0], Acc) ->
     #b_br{succ=Succ,fail=Fail} = Last,
     Ws = sets:from_list([Succ,Fail]),
@@ -1928,7 +1932,8 @@ trim_try([{L, Blk0} | Bs], Unreachable0, Killed0, Acc) ->
         false ->
             #b_blk{is=Is0,last=Last0} = Blk0,
             case reverse(Is0) of
-                [#b_set{op=new_try_tag,dst=Tag}|Is] ->
+                [#b_set{op={succeeded,body}},
+                 #b_set{op=new_try_tag,dst=Tag} | Is] ->
                     #b_br{succ=SuccLbl,fail=PadLbl} = Last0,
                     Unreachable = sets:del_element(PadLbl, Unreachable0),
                     case sets:is_element(PadLbl, Unreachable0) of

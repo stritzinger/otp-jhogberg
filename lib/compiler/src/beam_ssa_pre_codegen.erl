@@ -2799,8 +2799,8 @@ reserve_terminator(L, Is, #b_br{bool=#b_var{},succ=Succ,fail=Fail},
             Xs = res_xregs_from_phi(PhiIs, Succ, Res, #{}),
             res_xregs_from_phi(PhiIs, Fail, Res, Xs);
         {_,_} when Is =/= [] ->
-            case last(Is) of
-                #b_set{op=succeeded,args=[Arg]} ->
+            case reserve_terminator_check_last(Is) of
+                {succeeded, Arg} ->
                     %% We know that Arg will not be used at the failure
                     %% label, so we can pick up register hints from the
                     %% success label.
@@ -2809,13 +2809,13 @@ reserve_terminator(L, Is, #b_br{bool=#b_var{},succ=Succ,fail=Fail},
                         #{Arg:=Reg} -> #{Arg=>Reg};
                         #{} -> #{}
                     end;
-                #b_set{op=new_try_tag} ->
+                try_tag ->
                     %% We know that no X registers will be used at the
                     %% failure label (a block starting with the
                     %% landingpad instruction), so we can pick up
                     %% register hints from the success label.
                     reserve_terminator_1(L, Succ, Is, Blocks, XsMap, Res);
-                _ ->
+                unsafe ->
                     %% Register hints from the success block may not
                     %% be safe at the failure block, and vice versa.
                     #{}
@@ -2842,6 +2842,15 @@ reserve_terminator(L, Is, #b_br{bool=Bool,succ=Succ,fail=Fail},
     end;
 reserve_terminator(_, _, _, _, _, _) ->
     #{}.
+
+reserve_terminator_check_last([#b_set{op=succeeded,args=[Arg]}]) ->
+    {succeeded, Arg};
+reserve_terminator_check_last([#b_set{op=new_try_tag} | _]) ->
+    try_tag;
+reserve_terminator_check_last([_ | Is]) ->
+    reserve_terminator_check_last(Is);
+reserve_terminator_check_last([]) ->
+    unsafe.
 
 reserve_terminator_1(L, Succ, _Is, Blocks, XsMap, Res) ->
     case {Blocks, XsMap} of

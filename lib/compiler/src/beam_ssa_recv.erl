@@ -228,7 +228,9 @@ scan_is([#b_set{op={succeeded,body}}], Blk, Lbl, _Blocks, FuncId, State) ->
     %% to add try/catch everywhere to clear markers before rethrowing, and that
     %% isn't worth the bother.
     scan_add_edge({FuncId, Lbl}, {FuncId, Succ}, State);
-scan_is([#b_set{op=new_try_tag,dst=Dst}], Blk, Lbl, _Blocks, FuncId, State) ->
+scan_is([#b_set{op=new_try_tag,dst=TryTag},
+         #b_set{op={succeeded,body},dst=Dst,args=[TryTag]}],
+        Blk, Lbl, _Blocks, FuncId, State) ->
     %% This never throws but the failure label points at a landingpad, so we'll
     %% ignore that branch.
     #b_br{bool=Dst,succ=Succ} = Blk#b_blk.last, %Assertion.
@@ -824,8 +826,6 @@ insert_bind(Lbl, Ref, Marker, Blocks0, Count0) ->
 insert_bind_is([#b_set{}, #b_set{op={succeeded,_}}]=Is, Bind, _Last) ->
     [Bind | Is];
 insert_bind_is([#b_set{op=call,dst=Ret}]=Is, Bind, #b_ret{arg=Ret}) ->
-    [Bind | Is];
-insert_bind_is([#b_set{op=new_try_tag}]=Is, Bind, _Last) ->
     [Bind | Is];
 insert_bind_is([#b_set{op=Op}=I | Is], Bind, Last) ->
     true = Op =/= bs_put,                       %Assertion.
