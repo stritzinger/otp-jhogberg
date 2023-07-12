@@ -3283,6 +3283,8 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
         Label size_assert = a.newLabel();
 
         mov_arg(TMP1, Dst);
+
+        a.sub(TMP1, TMP1, imm(2));
         a.ldp(TMP1, TMP2, arm::Mem(TMP1));
 
         a.and_(TMP1, TMP1, imm(0x3F));
