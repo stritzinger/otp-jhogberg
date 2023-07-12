@@ -832,6 +832,24 @@ void BeamGlobalAssembler::emit_bs_get_tail_shared() {
     emit_leave_runtime<Update::eHeapOnlyAlloc>();
     emit_leave_runtime_frame();
 
+    {
+        Label size_assert = a.newLabel();
+
+        a.sub(TMP1, ARG1, imm(2));
+        a.ldp(TMP1, TMP2, arm::Mem(TMP1));
+
+        a.and_(TMP1, TMP1, imm(0x3F));
+        a.cmp(TMP1, imm(0x9 << 2));
+        a.b_ne(size_assert); /* Not a heap binary */
+
+        a.cmp(TMP2, imm(64));
+        a.b_ls(size_assert); /* Properly sized heap binary */
+
+        a.udf(0xED1D);
+
+        a.bind(size_assert);
+    }
+
     a.ret(a64::x30);
 }
 
