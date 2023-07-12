@@ -2691,6 +2691,15 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
             comment("allocate heap binary of dynamic size (=< %ld bits)",
                     estimated_num_bits);
 
+            {
+                Label size_assert = a.newLabel();
+
+                a.cmp(sizeReg, imm(estimated_num_bits));
+                a.b_ls(size_assert);
+                a.udf(0xBEAD);
+                a.bind(size_assert);
+            }
+
             /* Calculate number of bytes to allocate. */
             need = (heap_bin_size(0) + Alloc.get() + S_RESERVED);
             a.lsr(sizeReg, sizeReg, imm(3));
@@ -3269,6 +3278,24 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
 
     comment("done");
     mov_arg(Dst, TMP_MEM1q);
+
+    {
+        Label size_assert = a.newLabel();
+
+        mov_arg(TMP1, Dst);
+        a.ldp(TMP1, TMP2, arm::Mem(TMP1));
+
+        a.and_(TMP1, TMP1, imm(0x3F));
+        a.cmp(TMP1, imm(0x9 << 2));
+        a.b_ne(size_assert); /* Not a heap binary */
+
+        a.cmp(TMP2, imm(64));
+        a.b_ls(size_assert); /* Properly sized heap binary */
+
+        a.udf(0x5678);
+
+        a.bind(size_assert);
+    }
 }
 
 /*
