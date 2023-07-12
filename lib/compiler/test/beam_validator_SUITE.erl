@@ -43,7 +43,7 @@
          container_performance/1,
          infer_relops/1,
          not_equal_inference/1,bad_bin_unit/1,singleton_inference/1,
-         inert_update_type/1,range_inference/1]).
+         inert_update_type/1,range_inference/1,create_bin_overflow/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -80,7 +80,7 @@ groups() ->
        bs_saved_position_units,parent_container,
        container_performance,infer_relops,
        not_equal_inference,bad_bin_unit,singleton_inference,
-       inert_update_type,range_inference]}].
+       inert_update_type,range_inference,create_bin_overflow]}].
 
 init_per_suite(Config) ->
     test_lib:recompile(?MODULE),
@@ -1145,6 +1145,24 @@ range_inference_1(<<X/utf8>>) ->
         -2147483648 ->
             ok
     end.
+
+create_bin_overflow(Config) ->
+    Data = proplists:get_value(data_dir, Config),
+    File = filename:join(Data, "create_bin_overflow.erl"),
+
+    {error,
+     [{"create_bin_overflow",
+       [{1,beam_validator,
+         {{create_bin_overflow,t,0},
+          {{bs_create_bin,
+               {f,0},
+               0,1,1,
+               _,
+               {list,[_|_]}},
+           _,limit}}}]}],
+     []} = compile:file(File, [binary,return_errors]),
+
+    ok.
 
 id(I) ->
     I.

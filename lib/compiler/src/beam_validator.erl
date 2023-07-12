@@ -1098,7 +1098,7 @@ vi({bs_create_bin,{f,Fail},Heap,Live,Unit,Dst,{list,List0}}, Vst0) ->
     verify_live(Live, Vst0),
     verify_y_init(Vst0),
     List = [unpack_typed_arg(Arg, Vst0) || Arg <- List0],
-    verify_create_bin_list(List, Vst0),
+    verify_create_bin_list(List, 0, Vst0),
     Vst = prune_x_regs(Live, Vst0),
     branch(Fail, Vst,
            fun(FailVst0) ->
@@ -1552,7 +1552,8 @@ update_tuple_highest_index([Index, _Val | List], Acc) when is_integer(Index) ->
 update_tuple_highest_index([], Acc) when Acc >= 1 ->
     Acc.
 
-verify_create_bin_list([{atom,string},_Seg,Unit,Flags,Val,Size|Args], Vst) ->
+verify_create_bin_list([{atom,string},_Seg,Unit,Flags,Val,Size|Args],
+                       Overflow, Vst) ->
     assert_bs_unit({atom,string}, Unit),
     assert_term(Flags, Vst),
     case Val of
@@ -1561,15 +1562,37 @@ verify_create_bin_list([{atom,string},_Seg,Unit,Flags,Val,Size|Args], Vst) ->
     end,
     assert_term(Flags, Vst),
     assert_term(Size, Vst),
-    verify_create_bin_list(Args, Vst);
-verify_create_bin_list([Type,_Seg,Unit,Flags,Val,Size|Args], Vst) ->
+    verify_create_bin_list(Args, vcbl_check_overflow(Size, Overflow), Vst);
+verify_create_bin_list([Type,_Seg,Unit,Flags,Val,Size|Args],
+                       Overflow, Vst) ->
     assert_term(Type, Vst),
     assert_bs_unit(Type, Unit),
     assert_term(Flags, Vst),
     assert_term(Val, Vst),
     assert_term(Size, Vst),
-    verify_create_bin_list(Args, Vst);
-verify_create_bin_list([], _Vst) -> ok.
+    verify_create_bin_list(Args, vcbl_check_overflow(Size, Overflow), Vst);
+verify_create_bin_list([], _Overflow, _Vst) ->
+    ok.
+
+%% The implementation doesn't check for overflow when adding up the final size
+%% of the created binary. While creating such a binary inevitably fails due to
+%% the segments being smaller than the requested size, it's possible that the
+%% allocated binary is smaller than required by the segments preceding the one
+%% causing the failure.
+%%
+%% Adding overflow checks to the instruction is a bit too complicated to just
+%% add in a patch, so we'll limit the number of arbitrarily-sized segments to a
+%% safe number here instead.
+%%
+%% Note that we do not count `all`-sized segments like `Binary/bits` here as
+%% these sizes will never be large enough to cause overflow.
+vcbl_check_overflow({Kind, _}, Overflow) when Kind =:= x; Kind =:= y ->
+    case Overflow + 1 of
+        32 -> error(limit);
+        N -> N
+    end;
+vcbl_check_overflow(_, Overflow) ->
+    Overflow.
 
 update_create_bin_list([{atom,string},_Seg,_Unit,_Flags,_Val,_Size|T], Vst) ->
     update_create_bin_list(T, Vst);
