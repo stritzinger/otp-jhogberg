@@ -2320,42 +2320,7 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
             break;
         }
 
-        /*
-         * Attempt to calculate the effective size of this segment.
-         * Give up if variable or invalid.
-         */
-        if (maybe_one_of<BeamTypeId::Integer>(seg.size) && seg.unit > 0) {
-            auto max = std::get<1>(getClampedRange(seg.size));
-
-            ERTS_ASSERT(!seg.size.isSmall() ||
-                        max == seg.size.as<ArgSmall>().getSigned());
-
-            if (max > 0 && max <= (Sint)(ERL_ONHEAP_BIN_LIMIT * seg.unit)) {
-                auto seg_size = max * seg.unit;
-
-                estimated_num_bits += seg_size;
-
-                if (seg.size.isSmall()) {
-                    seg.effectiveSize = seg_size;
-                    num_bits += seg_size;
-                }
-            } else {
-                /* Suppress creation of heap binary. */
-                estimated_num_bits = (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
-            }
-        } else {
-            switch (seg.type) {
-            case am_utf8:
-            case am_utf16:
-            case am_utf32:
-                estimated_num_bits += 32;
-                break;
-            default:
-                /* Suppress creation of heap binary. */
-                estimated_num_bits = (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
-                break;
-            }
-        }
+        estimated_num_bits = (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
 
         if (seg.effectiveSize < 0 && seg.type != am_append &&
             seg.type != am_private_append) {
