@@ -2324,23 +2324,25 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
          * Attempt to calculate the effective size of this segment.
          * Give up if variable or invalid.
          */
-        if (seg.size.isSmall() && seg.unit != 0) {
-            Uint unsigned_size = seg.size.as<ArgSmall>().getUnsigned();
+        if (maybe_one_of<BeamTypeId::Integer>(seg.size) && seg.unit > 0) {
+            auto max = std::get<1>(getClampedRange(seg.size));
 
-            if ((unsigned_size >> (sizeof(Eterm) - 1) * 8) != 0) {
-                /* Suppress creation of heap binary. */
-                estimated_num_bits += (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
-            } else {
-                /* This multiplication cannot overflow. */
-                Uint seg_size = seg.unit * unsigned_size;
-                seg.effectiveSize = seg_size;
-                num_bits += seg_size;
+            ERTS_ASSERT(!seg.size.isSmall() ||
+                        max == seg.size.as<ArgSmall>().getSigned());
+
+            if (max > 0 && max <= (Sint)(ERL_ONHEAP_BIN_LIMIT * seg.unit)) {
+                auto seg_size = max * seg.unit;
+
                 estimated_num_bits += seg_size;
+
+                if (seg.size.isSmall()) {
+                    seg.effectiveSize = seg_size;
+                    num_bits += seg_size;
+                }
+            } else {
+                /* Suppress creation of heap binary. */
+                estimated_num_bits = (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
             }
-        } else if (seg.unit > 0) {
-            auto max = std::min(std::get<1>(getClampedRange(seg.size)),
-                                Sint((ERL_ONHEAP_BIN_LIMIT + 1) * 8));
-            estimated_num_bits += max * seg.unit;
         } else {
             switch (seg.type) {
             case am_utf8:
@@ -2350,7 +2352,7 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
                 break;
             default:
                 /* Suppress creation of heap binary. */
-                estimated_num_bits += (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
+                estimated_num_bits = (ERL_ONHEAP_BIN_LIMIT + 1) * 8;
                 break;
             }
         }
@@ -2401,6 +2403,8 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
      * word. */
     if (sizeReg.isValid()) {
         comment("calculate sizes");
+        ERTS_ASSERT(num_bits > (ERL_ONHEAP_BIN_LIMIT * 8) ||
+                    num_bits <= estimated_num_bits);
         mov_imm(sizeReg, num_bits);
     }
 
