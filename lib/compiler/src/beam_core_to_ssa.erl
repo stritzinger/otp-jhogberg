@@ -95,7 +95,7 @@
 %% to SSA instructions.)
 
 -record(cg_tuple, {es}).
--record(cg_map, {var=#b_literal{val=#{}},op,es}).
+-record(cg_map, {op,es}).
 -record(cg_map_pair, {key,val}).
 -record(cg_cons, {hd,tl}).
 -record(cg_binary, {segs}).
