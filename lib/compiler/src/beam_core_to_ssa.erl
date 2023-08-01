@@ -730,11 +730,13 @@ force_variable(Ke, St0) ->
     {V,[#iset{vars=[V],arg=Ke}],St1}.
 
 %% pattern(Cpat, Sub, State) -> {Kpat,Sub,State}.
-%%  Convert patterns.  Variables shadow so rename variables that are
-%%  already defined.
+%%  Convert patterns. Variables shadow so rename variables that are
+%%  already defined. We also rename the last remaining atom-named
+%%  variables to ensure that the SSA passes always get integer-named
+%%  variables (so as to avoid sort conflicts when solving constraints)
 
 pattern(#c_var{name=V}, Sub, St0) ->
-    case sets:is_element(V, St0#kern.ds) of
+    case sets:is_element(V, St0#kern.ds) orelse is_atom(V) of
         true ->
             {New,St1} = new_var_name(St0),
             {#b_var{name=New},
