@@ -3538,21 +3538,18 @@ unify_union(List) ->
 %% names (Module and Name) of the first argument (the opaque type to
 %% check) occurs in any of the opaque types of the second argument.
 is_opaque_type(?opaque(Elements), Opaques) ->
-  lists:any(fun(Opaque) -> is_opaque_type2(Opaque, Opaques) end, Elements).
+  Es = sofs:from_term([{M,F,A}
+                       || #opaque{mod=M,name=F,arity=A} <- Elements]),
+  not sofs:is_disjoint(Es, opaques_to_sofs(Opaques)).
 
-is_opaque_type2(#opaque{mod = Mod1, name = Name1, arity = Arity1}, Opaques) ->
-  F1 = fun(?opaque(Es)) ->
-           F2 = fun(#opaque{mod = Mod, name = Name, arity = Arity}) ->
-                    is_type_name(Mod1, Name1, Arity1, Mod, Name, Arity)
-                end,
-           lists:any(F2, Es)
-       end,
-  lists:any(F1, Opaques).
+is_opaque_type2(#opaque{mod=M,name=F,arity=A}, Opaques) ->
+  Es = sofs:from_term([{M,F,A}]),
+  not sofs:is_disjoint(Es, opaques_to_sofs(Opaques)).
 
-is_type_name(Mod, Name, Arity, Mod, Name, Arity) ->
-  true;
-is_type_name(_Mod1, _Name1, _Arity1, _Mod2, _Name2, _Arity2) ->
-  false.
+opaques_to_sofs(Opaques0) ->
+  MFAs = [[{M,F,A} || #opaque{mod=M,name=F,arity=A} <- Os]
+          || ?opaque(Os) <- Opaques0],
+  sofs:union(sofs:from_term(MFAs)).
 
 %%t_assign_variables_to_subtype(T1, T2) ->
 %%  try
