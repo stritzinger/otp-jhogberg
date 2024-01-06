@@ -22,6 +22,7 @@
 #include <vector>
 #include <unordered_map>
 #include <map>
+#include <functional>
 #include <algorithm>
 #include <cmath>
 
@@ -117,6 +118,9 @@ protected:
     const x86::Gp ARG5 = x86::r10;
     const x86::Gp ARG6 = x86::r11;
 
+    const x86::Gp TMP1 = x86::rdi;
+    const x86::Gp TMP2 = x86::rsi;
+
     const x86::Gp ARG1d = x86::ecx;
     const x86::Gp ARG2d = x86::edx;
     const x86::Gp ARG3d = x86::r8d;
@@ -130,6 +134,9 @@ protected:
     const x86::Gp ARG4 = x86::rcx;
     const x86::Gp ARG5 = x86::r8;
     const x86::Gp ARG6 = x86::r9;
+
+    const x86::Gp TMP1 = x86::r10;
+    const x86::Gp TMP2 = x86::r11;
 
     const x86::Gp ARG1d = x86::edi;
     const x86::Gp ARG2d = x86::esi;
@@ -1035,123 +1042,206 @@ class BeamModuleAssembler : public BeamAssembler,
 
     /* Skip unnecessary moves in mov_arg() and cmp_arg(). */
     size_t last_movarg_offset = 0;
-    x86::Gp last_movarg_from1, last_movarg_from2;
-    x86::Mem last_movarg_to1, last_movarg_to2;
 
-    /* Private helper. */
-    void preserve__cache(x86::Gp dst) {
-        last_movarg_offset = a.offset();
-        invalidate_cache(dst);
-    }
+    struct CacheEntry {
+        x86::Mem mem;
+        x86::Gp reg;
+    };
 
-    void preserve__cache(x86::Mem mem) {
-        last_movarg_offset = a.offset();
-        invalidate_cache(mem);
-    }
+    static const int max_cache_entries = 20;
+    CacheEntry cache[max_cache_entries];
+    int num_cache_entries = 0;
 
     bool is_cache_valid() {
         return a.offset() == last_movarg_offset;
     }
 
-    void preserve_cache(x86::Gp dst, bool cache_valid) {
-        if (cache_valid) {
-            preserve__cache(dst);
+    void consolidate_cache() {
+        if (!is_cache_valid()) {
+            num_cache_entries = 0;
         }
+        last_movarg_offset = a.offset();
     }
 
-    void preserve_cache(x86::Mem mem, bool cache_valid) {
-        if (cache_valid) {
-            preserve__cache(mem);
+    x86::Gp find_cache(x86::Mem mem) {
+        consolidate_cache();
+
+        for (int slot = 0; slot < num_cache_entries; slot++) {
+            if (mem == cache[slot].mem) {
+                ASSERT(cache[slot].reg.isValid());
+                return cache[slot].reg;
+            }
         }
+
+        return x86::Gp();
+    }
+
+    bool is_not_cached(x86::Gp reg) {
+        consolidate_cache();
+
+        for (int slot = 0; slot < num_cache_entries; slot++) {
+            if (reg == cache[slot].reg) {
+                return false;
+            } else if (cache[slot].mem.hasBase() &&
+                       cache[slot].mem.baseReg() == reg) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void put_cache_entry(x86::Mem mem, x86::Gp reg) {
+        int slot;
+
+        if (mem.hasBase() && mem.baseReg() == reg) {
+            return;
+        }
+
+        for (slot = 0; slot < num_cache_entries; slot++) {
+            if (cache[slot].mem == mem) {
+                break;
+            }
+        }
+
+        if (slot >= num_cache_entries) {
+            for (slot = 0; slot < num_cache_entries; slot++) {
+                if (!cache[slot].mem.hasBase()) {
+                    break;
+                }
+            }
+
+            if (slot >= num_cache_entries) {
+                if (num_cache_entries < max_cache_entries) {
+                    slot = num_cache_entries++;
+                } else {
+                    slot = 0;
+                }
+            }
+            cache[slot].mem = mem;
+        }
+
+        cache[slot].reg = reg;
     }
 
     /* Store CPU register into memory and update the cache. */
     void store_cache(x86::Gp src, x86::Mem dst) {
-        if (is_cache_valid() && dst != last_movarg_to1) {
-            /* Something is already cached in the first slot. Use the
-             * second slot. */
-            a.mov(dst, src);
-
-            last_movarg_offset = a.offset();
-            last_movarg_to2 = dst;
-            last_movarg_from2 = src;
-        } else {
-            /* Nothing cached yet, or the first slot has the same
-             * memory address as we will store into. Use the first
-             * slot and invalidate the second slot. */
-            a.mov(dst, src);
-
-            last_movarg_offset = a.offset();
-            last_movarg_to1 = dst;
-            last_movarg_from1 = src;
-
-            last_movarg_to2 = x86::Mem();
-        }
+        consolidate_cache();
+        a.mov(dst, src);
+        invalidate_cache(dst);
+        put_cache_entry(dst, src);
+        last_movarg_offset = a.offset();
     }
 
     void invalidate_cache(x86::Gp dst) {
-        if (dst == last_movarg_from1) {
-            last_movarg_to1 = x86::Mem();
-            last_movarg_from1 = x86::Gp();
-        }
-        if (dst == last_movarg_from2) {
-            last_movarg_to2 = x86::Mem();
-            last_movarg_from2 = x86::Gp();
+        for (int i = 0; i < num_cache_entries; i++) {
+            if (dst == cache[i].reg) {
+                cache[i].mem = x86::Mem();
+                cache[i].reg = x86::Gp();
+            } else if (cache[i].mem.hasBase() &&
+                       cache[i].mem.baseReg() == dst) {
+                cache[i].mem = x86::Mem();
+                cache[i].reg = x86::Gp();
+            }
         }
     }
 
     void invalidate_cache(x86::Mem mem) {
-        if (mem == last_movarg_to1) {
-            last_movarg_to1 = x86::Mem();
-            last_movarg_from1 = x86::Gp();
-        }
-        if (mem == last_movarg_to2) {
-            last_movarg_to2 = x86::Mem();
-            last_movarg_from2 = x86::Gp();
-        }
-    }
-
-    x86::Gp cached_reg(x86::Mem mem) {
-        if (is_cache_valid()) {
-            if (mem == last_movarg_to1) {
-                return last_movarg_from1;
-            }
-            if (mem == last_movarg_to2) {
-                return last_movarg_from2;
+        for (int i = 0; i < num_cache_entries; i++) {
+            if (mem == cache[i].mem) {
+                cache[i].mem = x86::Mem();
+                cache[i].reg = x86::Gp();
+                break;
             }
         }
-        return x86::Gp();
     }
 
     void load_cached(x86::Gp dst, x86::Mem mem) {
-        if (a.offset() == last_movarg_offset) {
-            x86::Gp reg = cached_reg(mem);
+        x86::Gp cached_reg = find_cache(mem);
 
-            if (reg.isValid()) {
-                /* This memory location is cached. */
-                if (reg != dst) {
-                    comment("simplified fetching of BEAM register");
-                    a.mov(dst, reg);
-                    preserve__cache(dst);
-                } else {
-                    comment("skipped fetching of BEAM register");
-                    invalidate_cache(dst);
-                }
+        if (cached_reg.isValid()) {
+            /* This memory location is cached. */
+            if (cached_reg == dst) {
+                comment("skipped fetching of BEAM register");
             } else {
-                /* Not cached. Load and preserve the cache. */
-                a.mov(dst, mem);
-                preserve__cache(dst);
+                comment("simplified fetching of BEAM register");
+                a.mov(dst, cached_reg);
+                invalidate_cache(dst);
+                last_movarg_offset = a.offset();
             }
         } else {
-            /* The cache is invalid. */
+            /* Not cached. Load and update cache. */
             a.mov(dst, mem);
+            invalidate_cache(dst);
+            put_cache_entry(mem, dst);
+            last_movarg_offset = a.offset();
+        }
+    }
+
+    void preserve_cache(std::function<void(void)> generate,
+                        std::initializer_list<x86::Gp> clobber = {}) {
+        bool valid_cache = is_cache_valid();
+
+        generate();
+
+        if (valid_cache) {
+            for (const auto &reg : clobber) {
+                invalidate_cache(reg);
+            }
 
             last_movarg_offset = a.offset();
-            last_movarg_to1 = mem;
-            last_movarg_from1 = dst;
-
-            last_movarg_to2 = x86::Mem();
         }
+    }
+
+    void mov_preserve_cache(x86::Mem dst, x86::Gp src) {
+        preserve_cache([&]() {
+            invalidate_cache(dst);
+            a.mov(dst, src);
+        });
+    }
+
+    void mov_preserve_cache(x86::Gp dst, x86::Gp src) {
+        preserve_cache(
+                [&]() {
+                    a.mov(dst, src);
+                },
+                {dst});
+    }
+
+    void mov_preserve_cache(x86::Gp dst, x86::Mem src) {
+        preserve_cache(
+                [&]() {
+                    a.mov(dst, src);
+                },
+                {dst});
+    }
+
+    void cmp_preserve_cache(x86::Gp reg1, x86::Gp reg2) {
+        preserve_cache([&]() {
+            a.cmp(reg1, reg2);
+        });
+    }
+
+    void cmp_preserve_cache(x86::Mem mem, x86::Gp reg) {
+        preserve_cache([&]() {
+            a.cmp(mem, reg);
+        });
+    }
+
+    /* Pick a temporary register, preferring a register not present in
+     * the cache. */
+    x86::Gp alloc_temp_reg() {
+        if (is_cache_valid()) {
+            /* We never pick ARG2 because it is used to point to the
+             * currently active tuple. */
+            for (x86::Gp reg :
+                 {TMP1, TMP2, ARG3, ARG4, ARG5, ARG6, ARG1, RET}) {
+                if (is_not_cached(reg)) {
+                    return reg;
+                }
+            }
+        }
+        return TMP1;
     }
 
     /* Maps code pointers to thunks that jump to them, letting us treat global
@@ -1231,7 +1321,9 @@ protected:
                           bool skip_header_test = false);
 
     void emit_is_boxed(Label Fail, x86::Gp Src, Distance dist = dLong) {
-        BeamAssembler::emit_is_boxed(Fail, Src, dist);
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_boxed(Fail, Src, dist);
+        });
     }
 
     void emit_is_boxed(Label Fail,
@@ -1243,7 +1335,31 @@ protected:
             return;
         }
 
-        BeamAssembler::emit_is_boxed(Fail, Src, dist);
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_boxed(Fail, Src, dist);
+        });
+    }
+
+    void emit_is_cons(Label Fail, x86::Gp Src, Distance dist = dLong) {
+        preserve_cache([&]() {
+            emit_test_cons(Src);
+            if (dist == dShort) {
+                a.short_().jne(Fail);
+            } else {
+                a.jne(Fail);
+            }
+        });
+    }
+
+    void emit_is_not_cons(Label Fail, x86::Gp Src, Distance dist = dLong) {
+        preserve_cache([&]() {
+            emit_test_cons(Src);
+            if (dist == dShort) {
+                a.short_().je(Fail);
+            } else {
+                a.je(Fail);
+            }
+        });
     }
 
     void emit_get_list(const x86::Gp boxed_ptr,
@@ -1439,7 +1555,7 @@ protected:
     }
 
     void cmp_arg(x86::Mem mem, const ArgVal &val, const x86::Gp &spill) {
-        x86::Gp reg = cached_reg(mem);
+        x86::Gp reg = find_cache(mem);
 
         if (reg.isValid()) {
             /* Note that the cast to Sint is necessary to handle
@@ -1447,82 +1563,117 @@ protected:
             if (val.isImmed() &&
                 Support::isInt32((Sint)val.as<ArgImmed>().get())) {
                 comment("simplified compare of BEAM register");
-                a.cmp(reg, imm(val.as<ArgImmed>().get()));
+                preserve_cache([&]() {
+                    a.cmp(reg, imm(val.as<ArgImmed>().get()));
+                });
             } else if (reg != spill) {
                 comment("simplified compare of BEAM register");
                 mov_arg(spill, val);
-                a.cmp(reg, spill);
+                cmp_preserve_cache(reg, spill);
             } else {
                 mov_arg(spill, val);
-                a.cmp(mem, spill);
+                cmp_preserve_cache(mem, spill);
             }
         } else {
             /* Note that the cast to Sint is necessary to handle
              * negative numbers such as NIL. */
             if (val.isImmed() &&
                 Support::isInt32((Sint)val.as<ArgImmed>().get())) {
-                a.cmp(mem, imm(val.as<ArgImmed>().get()));
+                preserve_cache([&]() {
+                    a.cmp(mem, imm(val.as<ArgImmed>().get()));
+                });
             } else {
                 mov_arg(spill, val);
-                a.cmp(mem, spill);
+                cmp_preserve_cache(mem, spill);
             }
         }
     }
 
     void cmp_arg(x86::Gp gp, const ArgVal &val, const x86::Gp &spill) {
         if (val.isImmed() && Support::isInt32((Sint)val.as<ArgImmed>().get())) {
-            a.cmp(gp, imm(val.as<ArgImmed>().get()));
+            preserve_cache([&]() {
+                a.cmp(gp, imm(val.as<ArgImmed>().get()));
+            });
         } else {
             mov_arg(spill, val);
-            a.cmp(gp, spill);
+            cmp_preserve_cache(gp, spill);
         }
     }
 
     void cmp(x86::Gp gp, int64_t val, const x86::Gp &spill) {
         if (Support::isInt32(val)) {
-            a.cmp(gp, imm(val));
+            preserve_cache([&]() {
+                a.cmp(gp, imm(val));
+            });
         } else if (gp.isGpd()) {
             mov_imm(spill, val);
-            a.cmp(gp, spill.r32());
+            preserve_cache([&]() {
+                a.cmp(gp, spill.r32());
+            });
         } else {
             mov_imm(spill, val);
-            a.cmp(gp, spill);
+            cmp_preserve_cache(gp, spill);
         }
     }
 
     void sub(x86::Gp gp, int64_t val, const x86::Gp &spill) {
         if (Support::isInt32(val)) {
-            a.sub(gp, imm(val));
+            preserve_cache(
+                    [&]() {
+                        a.sub(gp, imm(val));
+                    },
+                    {gp});
         } else {
-            mov_imm(spill, val);
-            a.sub(gp, spill);
+            preserve_cache(
+                    [&]() {
+                        mov_imm(spill, val);
+                        a.sub(gp, spill);
+                    },
+                    {gp, spill});
         }
     }
 
     /* Note: May clear flags. */
     void mov_arg(x86::Gp to, const ArgVal &from, const x86::Gp &spill) {
-        bool valid_cache = is_cache_valid();
-
         if (from.isBytePtr()) {
             make_move_patch(to, strings, from.as<ArgBytePtr>().get());
         } else if (from.isExport()) {
             make_move_patch(to, imports[from.as<ArgExport>().get()].patches);
         } else if (from.isImmed()) {
-            mov_imm(to, from.as<ArgImmed>().get());
+            preserve_cache(
+                    [&]() {
+                        mov_imm(to, from.as<ArgImmed>().get());
+                    },
+                    {to});
         } else if (from.isLambda()) {
-            make_move_patch(to, lambdas[from.as<ArgLambda>().get()].patches);
+            preserve_cache(
+                    [&]() {
+                        make_move_patch(
+                                to,
+                                lambdas[from.as<ArgLambda>().get()].patches);
+                    },
+                    {to});
         } else if (from.isLiteral()) {
-            make_move_patch(to, literals[from.as<ArgLiteral>().get()].patches);
+            preserve_cache(
+                    [&]() {
+                        make_move_patch(
+                                to,
+                                literals[from.as<ArgLiteral>().get()].patches);
+                    },
+                    {to});
         } else if (from.isRegister()) {
             auto mem = getArgRef(from.as<ArgRegister>());
             load_cached(to, mem);
         } else if (from.isWord()) {
-            mov_imm(to, from.as<ArgWord>().get());
+            preserve_cache(
+                    [&]() {
+                        mov_imm(to, from.as<ArgWord>().get());
+                    },
+                    {to});
         } else {
             ASSERT(!"mov_arg with incompatible type");
         }
 
-        preserve_cache(to, valid_cache);
 #ifdef DEBUG
         /* Explicitly clear flags to catch bugs quicker, it may be very rare
          * for a certain instruction to load values that would otherwise cause
@@ -1534,33 +1685,41 @@ protected:
     void mov_arg(x86::Mem to, const ArgVal &from, const x86::Gp &spill) {
         if (from.isImmed()) {
             auto val = from.as<ArgImmed>().get();
-            bool cache_valid = is_cache_valid();
 
             if (Support::isInt32((Sint)val)) {
-                a.mov(to, imm(val));
+                preserve_cache([&]() {
+                    a.mov(to, imm(val));
+                    invalidate_cache(to);
+                });
             } else {
-                a.mov(spill, imm(val));
-                a.mov(to, spill);
-                preserve_cache(spill, cache_valid);
+                preserve_cache(
+                        [&]() {
+                            a.mov(spill, imm(val));
+                            a.mov(to, spill);
+                            invalidate_cache(to);
+                        },
+                        {spill});
             }
-            preserve_cache(to, cache_valid);
         } else if (from.isWord()) {
             auto val = from.as<ArgWord>().get();
-            bool cache_valid = is_cache_valid();
 
             if (Support::isInt32((Sint)val)) {
-                a.mov(to, imm(val));
+                preserve_cache([&]() {
+                    a.mov(to, imm(val));
+                    invalidate_cache(to);
+                });
             } else {
-                a.mov(spill, imm(val));
-                a.mov(to, spill);
-                preserve_cache(spill, cache_valid);
+                preserve_cache(
+                        [&]() {
+                            a.mov(spill, imm(val));
+                            a.mov(to, spill);
+                            invalidate_cache(to);
+                        },
+                        {spill});
             }
-            preserve_cache(to, cache_valid);
         } else {
             mov_arg(spill, from);
-            bool cache_valid = is_cache_valid();
-            a.mov(to, spill);
-            preserve_cache(to, cache_valid);
+            mov_preserve_cache(to, spill);
         }
     }
 
@@ -1577,20 +1736,32 @@ protected:
     }
 
     void mov_arg(const ArgRegister &to, BeamInstr from, const x86::Gp &spill) {
-        if (Support::isInt32((Sint)from)) {
-            a.mov(getArgRef(to), imm(from));
-        } else {
-            a.mov(spill, imm(from));
-            mov_arg(to, spill);
-        }
+        preserve_cache(
+                [&]() {
+                    if (Support::isInt32((Sint)from)) {
+                        a.mov(getArgRef(to), imm(from));
+                    } else {
+                        a.mov(spill, imm(from));
+                        mov_arg(to, spill);
+                    }
+                    invalidate_cache(getArgRef(to));
+                },
+                {spill});
     }
 
     void mov_arg(const ArgRegister &to, const ArgVal &from, const x86::Gp &spill) {
-        if (from.isRegister()) {
-            mov_arg(spill, from);
-            mov_arg(to, spill);
-        } else {
+        if (!from.isRegister()) {
             mov_arg(getArgRef(to), from);
+        } else {
+            x86::Gp from_reg = find_cache(getArgRef(from));
+
+            if (from_reg.isValid()) {
+                comment("skipped fetching of BEAM register");
+            } else {
+                from_reg = spill;
+                mov_arg(from_reg, from);
+            }
+            mov_arg(to, from_reg);
         }
     }
 
