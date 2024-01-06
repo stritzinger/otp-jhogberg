@@ -961,95 +961,149 @@ class BeamModuleAssembler : public BeamAssembler,
     /* Skip unnecessary moves in load_source(), load_sources(), and
      * mov_arg(). Don't use these variables directly. */
     size_t last_destination_offset = 0;
-    a64::Gp last_destination_from1, last_destination_from2;
-    arm::Mem last_destination_to1, last_destination_to2;
 
-    /* Private helper. */
-    void preserve__cache(a64::Gp dst) {
-        last_destination_offset = a.offset();
-        invalidate_cache(dst);
-    }
+    struct CacheEntry {
+        arm::Mem mem;
+        a64::Gp reg;
+    };
+
+    static const int max_cache_entries = 16;
+    CacheEntry cache[max_cache_entries];
+    int num_cache_entries = 0;
 
     bool is_cache_valid() {
         return a.offset() == last_destination_offset;
     }
 
+    void consolidate_cache() {
+        if (!is_cache_valid()) {
+            num_cache_entries = 0;
+        }
+
+        last_destination_offset = a.offset();
+    }
+
+    void invalidate_cache(a64::Gp dst) {
+        for (int i = 0; i < num_cache_entries; i++) {
+            if (dst == cache[i].reg) {
+                cache[i].mem = arm::Mem();
+                cache[i].reg = a64::Gp();
+            } else if (cache[i].mem.hasBase() &&
+                       cache[i].mem.baseReg() == dst) {
+                cache[i].mem = arm::Mem();
+                cache[i].reg = a64::Gp();
+            }
+        }
+    }
+
+    void put_cache_entry(arm::Mem mem, a64::Gp reg) {
+        int slot;
+
+        if (reg == SUPER_TMP) {
+            return;
+        }
+
+        for (slot = 0; slot < num_cache_entries; slot++) {
+            if (cache[slot].mem == mem) {
+                break;
+            }
+        }
+
+        if (slot >= num_cache_entries) {
+            for (slot = 0; slot < num_cache_entries; slot++) {
+                if (!cache[slot].mem.hasBase()) {
+                    break;
+                }
+            }
+
+            if (slot >= num_cache_entries) {
+                if (num_cache_entries < max_cache_entries) {
+                    slot = num_cache_entries++;
+                } else {
+                    slot = 0;
+                }
+            }
+            cache[slot].mem = mem;
+        }
+
+        cache[slot].reg = reg;
+    }
+
+    a64::Gp find_cache(arm::Mem mem) {
+        consolidate_cache();
+
+        for (int slot = 0; slot < num_cache_entries; slot++) {
+            if (mem == cache[slot].mem) {
+                ASSERT(cache[slot].reg.isValid());
+                return cache[slot].reg;
+            }
+        }
+
+        return a64::Gp();
+    }
+
     /* Works as the STR instruction, but also updates the cache. */
     void str_cache(a64::Gp src, arm::Mem dst) {
-        if (a.offset() == last_destination_offset &&
-            dst != last_destination_to1) {
-            /* Something is already cached in the first slot. Use the
-             * second slot. */
-            a.str(src, dst);
-            last_destination_offset = a.offset();
-            last_destination_to2 = dst;
-            last_destination_from2 = src;
-        } else {
-            /* Nothing cached yet, or the first slot has the same
-             * memory address as we will store into. Use the first
-             * slot and invalidate the second slot. */
-            a.str(src, dst);
-            last_destination_offset = a.offset();
-            last_destination_to1 = dst;
-            last_destination_from1 = src;
-            last_destination_to2 = arm::Mem();
-        }
+        consolidate_cache();
+        invalidate_cache(src);
+
+        a.str(src, dst);
+
+        put_cache_entry(dst, src);
+        last_destination_offset = a.offset();
     }
 
     /* Works as the STP instruction, but also updates the cache. */
     void stp_cache(a64::Gp src1, a64::Gp src2, arm::Mem dst) {
-        safe_stp(src1, src2, dst);
-        last_destination_offset = a.offset();
-        last_destination_to1 = dst;
-        last_destination_from1 = src1;
-        last_destination_to2 =
-                arm::Mem(a64::GpX(dst.baseId()), dst.offset() + 8);
-        last_destination_from2 = src2;
-    }
+        arm::Mem next_dst = arm::Mem(a64::GpX(dst.baseId()), dst.offset() + 8);
 
-    void invalidate_cache(a64::Gp dst) {
-        if (dst == last_destination_from1) {
-            last_destination_to1 = arm::Mem();
-            last_destination_from1 = a64::Gp();
-        }
-        if (dst == last_destination_from2) {
-            last_destination_to2 = arm::Mem();
-            last_destination_from2 = a64::Gp();
-        }
+        consolidate_cache();
+        invalidate_cache(src1);
+        invalidate_cache(src2);
+
+        safe_stp(src1, src2, dst);
+
+        put_cache_entry(dst, src1);
+        put_cache_entry(next_dst, src2);
+
+        last_destination_offset = a.offset();
     }
 
     /* Works like LDR, but looks in the cache first. */
     void ldr_cached(a64::Gp dst, arm::Mem mem) {
-        if (a.offset() == last_destination_offset) {
-            a64::Gp cached_reg;
-            if (mem == last_destination_to1) {
-                cached_reg = last_destination_from1;
-            } else if (mem == last_destination_to2) {
-                cached_reg = last_destination_from2;
-            }
+        a64::Gp cached_reg = find_cache(mem);
 
-            if (cached_reg.isValid()) {
-                /* This memory location is cached. */
-                if (cached_reg != dst) {
-                    comment("simplified fetching of BEAM register");
-                    a.mov(dst, cached_reg);
-                    preserve__cache(dst);
-                } else {
-                    comment("skipped fetching of BEAM register");
-                    invalidate_cache(dst);
-                }
+        if (cached_reg.isValid()) {
+            /* This memory location is cached. */
+            if (cached_reg == dst) {
+                comment("skipped fetching of BEAM register");
             } else {
-                /* Not cached. Load and preserve the cache. */
-                a.ldr(dst, mem);
-                preserve__cache(dst);
+                comment("simplified fetching of BEAM register");
+                a.mov(dst, cached_reg);
+                invalidate_cache(dst);
+                last_destination_offset = a.offset();
             }
         } else {
-            /* The cache is invalid. */
+            /* Not cached. Load and update cache. */
             a.ldr(dst, mem);
+            invalidate_cache(dst);
+            put_cache_entry(mem, dst);
             last_destination_offset = a.offset();
-            last_destination_to1 = mem;
-            last_destination_from1 = dst;
-            last_destination_to2 = arm::Mem();
+        }
+    }
+
+    void preserve_cache(std::function<void(void)> generate,
+                        std::initializer_list<a64::Gp> clobber = {}) {
+        bool valid_cache = is_cache_valid();
+
+        generate();
+
+        if (valid_cache) {
+            for (const auto &reg : clobber) {
+                invalidate_cache(reg);
+            }
+
+            last_destination_offset = a.offset();
         }
     }
 
@@ -1058,21 +1112,19 @@ class BeamModuleAssembler : public BeamAssembler,
     }
 
     void mov_preserve_cache(a64::Gp dst, a64::Gp src) {
-        if (a.offset() == last_destination_offset) {
-            a.mov(dst, src);
-            preserve__cache(dst);
-        } else {
-            a.mov(dst, src);
-        }
+        preserve_cache(
+                [&]() {
+                    a.mov(dst, src);
+                },
+                {dst});
     }
 
-    void mov_imm_preserve_cache(a64::Gp dst, UWord value) {
-        if (a.offset() == last_destination_offset) {
-            mov_imm(dst, value);
-            preserve__cache(dst);
-        } else {
-            mov_imm(dst, value);
-        }
+    void untag_ptr_preserve_cache(a64::Gp dst, a64::Gp src) {
+        preserve_cache(
+                [&]() {
+                    emit_untag_ptr(dst, src);
+                },
+                {dst});
     }
 
     arm::Mem embed_label(const Label &label, enum Displacement disp);
@@ -1150,8 +1202,31 @@ protected:
     a64::Gp emit_call_fun(bool skip_box_test = false,
                           bool skip_header_test = false);
 
+    void emit_is_cons(Label Fail, a64::Gp Src) {
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_cons(Fail, Src);
+        });
+    }
+
+    void emit_is_not_cons(Label Fail, a64::Gp Src) {
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_not_cons(Fail, Src);
+        });
+    }
+
+    void emit_is_list(Label Fail, a64::Gp Src) {
+        preserve_cache([&]() {
+            a.tst(Src, imm(_TAG_PRIMARY_MASK - TAG_PRIMARY_LIST));
+            a.mov(SUPER_TMP, NIL);
+            a.ccmp(Src, SUPER_TMP, imm(NZCV::kEqual), imm(arm::CondCode::kNE));
+            a.b_ne(Fail);
+        });
+    }
+
     void emit_is_boxed(Label Fail, a64::Gp Src) {
-        BeamAssembler::emit_is_boxed(Fail, Src);
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_boxed(Fail, Src);
+        });
     }
 
     void emit_is_boxed(Label Fail, const ArgVal &Arg, a64::Gp Src) {
@@ -1160,7 +1235,9 @@ protected:
             return;
         }
 
-        BeamAssembler::emit_is_boxed(Fail, Src);
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_boxed(Fail, Src);
+        });
     }
 
     /* Copies `count` words from the address at `from`, to the address at `to`.
@@ -1446,7 +1523,11 @@ protected:
         ASSERT(tmp.isGpX());
 
         if (arg.isLiteral()) {
-            a.ldr(tmp, embed_constant(arg, disp32K));
+            preserve_cache(
+                    [&]() {
+                        a.ldr(tmp, embed_constant(arg, disp32K));
+                    },
+                    {tmp});
             return Variable(tmp);
         } else if (arg.isRegister()) {
             if (isRegisterBacked(arg)) {
@@ -1465,13 +1546,52 @@ protected:
                                          : arg.as<ArgWord>().get();
 
                 if (Support::isIntOrUInt32(val)) {
-                    mov_imm_preserve_cache(tmp, val);
+                    preserve_cache(
+                            [&]() {
+                                mov_imm(tmp, val);
+                            },
+                            {tmp});
                     return Variable(tmp);
                 }
             }
 
-            a.ldr(tmp, embed_constant(arg, disp32K));
+            preserve_cache(
+                    [&]() {
+                        a.ldr(tmp, embed_constant(arg, disp32K));
+                    },
+                    {tmp});
             return Variable(tmp);
+        }
+    }
+
+    /*
+     * Load the argument into ANY register, using the
+     * cache to avoid reloading the value.
+     *
+     * Because it is not possible to predict into which register
+     * the value will end up, the following code is UNSAFE:
+     *
+     *    auto src = load_source(Src);
+     *    a.tst(src.reg, ...);
+     *    a.mov(TMP2, NIL);
+     *    a.ccmp(src.reg, TMP2, ..., ...);
+     *
+     * If the value of Src happens to end up in TMP2, it will be
+     * overwritten before its second use.
+     *
+     * Basically, the only safe way to use this function is when the
+     * register is used immediately and only once. For example:
+     *
+     *    a.and_(TMP1, load_source(Src), imm(...));
+     *    a.cmp(TMP1, imm(...));
+     */
+    Variable<a64::Gp> load_source(const ArgVal &arg) {
+        a64::Gp cached_reg = find_cache(getArgRef(arg));
+
+        if (cached_reg.isValid()) {
+            return load_source(arg, cached_reg);
+        } else {
+            return load_source(arg, TMP1);
         }
     }
 
@@ -1559,6 +1679,8 @@ protected:
     void flush_var(const Variable<a64::Gp> &to) {
         if (to.mem.hasBase()) {
             str_cache(to.reg, to.mem);
+        } else {
+            invalidate_cache(to.reg);
         }
     }
 
@@ -1707,11 +1829,11 @@ protected:
         ASSERT(gp.isGpX());
 
         if (abs_offset <= sizeof(Eterm) * MAX_LDR_STR_DISPLACEMENT) {
-            bool valid_cache = is_cache_valid();
-            a.ldr(gp, mem);
-            if (valid_cache) {
-                preserve__cache(gp);
-            }
+            preserve_cache(
+                    [&]() {
+                        a.ldr(gp, mem);
+                    },
+                    {gp});
         } else {
             add(SUPER_TMP, a64::GpX(mem.baseId()), offset);
             a.ldr(gp, arm::Mem(SUPER_TMP));
@@ -1751,12 +1873,11 @@ protected:
         ASSERT(gp1 != gp2);
 
         if (abs_offset <= sizeof(Eterm) * MAX_LDP_STP_DISPLACEMENT) {
-            bool valid_cache = is_cache_valid();
-            a.ldp(gp1, gp2, mem);
-            if (valid_cache) {
-                preserve__cache(gp1);
-                preserve__cache(gp2);
-            }
+            preserve_cache(
+                    [&]() {
+                        a.ldp(gp1, gp2, mem);
+                    },
+                    {gp1, gp2});
         } else if (abs_offset < sizeof(Eterm) * MAX_LDR_STR_DISPLACEMENT) {
             /* Note that we used `<` instead of `<=`, as we're loading two
              * elements rather than one. */
