@@ -251,7 +251,8 @@ void BeamModuleAssembler::emit_i_make_fun3(const ArgLambda &Lambda,
                 a.lea(RET, x86::qword_ptr(HTOP, TAG_PRIMARY_BOXED));
                 a.add(HTOP, imm((ERL_FUN_SIZE + env.size()) * sizeof(Eterm)));
             },
-            {RET, HTOP});
+            RET,
+            HTOP);
     mov_arg(Dst, RET);
 }
 

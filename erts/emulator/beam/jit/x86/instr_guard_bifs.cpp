@@ -746,7 +746,7 @@ void BeamModuleAssembler::emit_bif_map_size(const ArgLabel &Fail,
                     a.shl(RET, imm(4));
                     a.or_(RETb, imm(_TAG_IMMED1_SMALL));
                 },
-                {RET});
+                RET);
         mov_arg(Dst, RET);
     }
 }

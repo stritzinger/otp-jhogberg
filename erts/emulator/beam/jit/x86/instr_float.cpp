@@ -104,7 +104,7 @@ void BeamModuleAssembler::emit_fstore(const ArgFRegister &Src,
             [&]() {
                 a.add(HTOP, imm(FLOAT_SIZE_OBJECT * sizeof(Eterm)));
             },
-            {HTOP});
+            HTOP);
 }
 
 /* ARG2 = source term */

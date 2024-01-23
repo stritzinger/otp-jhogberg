@@ -196,7 +196,7 @@ void BeamModuleAssembler::emit_i_plus(const ArgSource &LHS,
                     [&]() {
                         a.add(RET, imm(rhs_untagged));
                     },
-                    {RET});
+                    RET);
         } else if (RHS.isSmall()) {
             preserve_cache(
                     [&]() {
@@ -204,7 +204,8 @@ void BeamModuleAssembler::emit_i_plus(const ArgSource &LHS,
                                 RHS.as<ArgSmall>().get() & ~_TAG_IMMED1_MASK);
                         a.add(RET, ARG2);
                     },
-                    {RET, ARG2});
+                    RET,
+                    ARG2);
         } else {
             mov_arg(ARG2, RHS);
             preserve_cache(
@@ -212,7 +213,7 @@ void BeamModuleAssembler::emit_i_plus(const ArgSource &LHS,
                         a.lea(RET,
                               x86::qword_ptr(RET, ARG2, 0, -_TAG_IMMED1_SMALL));
                     },
-                    {RET});
+                    RET);
         }
 
         mov_arg(Dst, RET);
@@ -330,7 +331,7 @@ void BeamModuleAssembler::emit_i_minus(const ArgSource &LHS,
                     [&]() {
                         a.sub(RET, imm(rhs_untagged));
                     },
-                    {RET});
+                    RET);
         } else if (RHS.isSmall()) {
             mov_imm(ARG2, RHS.as<ArgSmall>().get() & ~_TAG_IMMED1_MASK);
             a.sub(RET, ARG2);
@@ -1286,14 +1287,14 @@ void BeamModuleAssembler::emit_i_band(const ArgSource &LHS,
                     [&]() {
                         a.and_(RETd, imm(RHS.as<ArgSmall>().get()));
                     },
-                    {RET});
+                    RET);
         } else if (RHS.isSmall() &&
                    Support::isInt32((Sint)RHS.as<ArgSmall>().get())) {
             preserve_cache(
                     [&]() {
                         a.and_(RET, imm(RHS.as<ArgSmall>().get()));
                     },
-                    {RET});
+                    RET);
         } else {
             mov_arg(ARG2, RHS);
             a.and_(RET, ARG2);
@@ -1417,7 +1418,7 @@ void BeamModuleAssembler::emit_i_bxor(const ArgLabel &Fail,
                                imm(RHS.as<ArgSmall>().get() &
                                    ~_TAG_IMMED1_SMALL));
                     },
-                    {RET});
+                    RET);
         } else {
             mov_arg(ARG2, RHS);
             preserve_cache(
@@ -1426,7 +1427,7 @@ void BeamModuleAssembler::emit_i_bxor(const ArgLabel &Fail,
                         a.xor_(RET, ARG2);
                         a.or_(RET, imm(_TAG_IMMED1_SMALL));
                     },
-                    {RET});
+                    RET);
         }
         mov_arg(Dst, RET);
         return;

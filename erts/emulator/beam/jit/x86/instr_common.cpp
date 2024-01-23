@@ -308,12 +308,13 @@ void BeamModuleAssembler::emit_get_list(const x86::Gp src,
         comment("(moving head and tail together)");
         x86::Mem dst_ptr = getArgRef(Hd, 16);
         x86::Mem src_ptr = getCARRef(boxed_ptr, 16);
-        preserve_cache([&]() {
-            vmovups(x86::xmm0, src_ptr);
-            vmovups(dst_ptr, x86::xmm0);
-            invalidate_cache(getArgRef(Hd));
-            invalidate_cache(getArgRef(Tl));
-        });
+        preserve_cache(
+                [&]() {
+                    vmovups(x86::xmm0, src_ptr);
+                    vmovups(dst_ptr, x86::xmm0);
+                },
+                getArgRef(Hd),
+                getArgRef(Tl));
         break;
     }
     case ArgVal::Relation::reverse_consecutive: {
@@ -324,12 +325,13 @@ void BeamModuleAssembler::emit_get_list(const x86::Gp src,
         comment("(moving and swapping head and tail together)");
         x86::Mem dst_ptr = getArgRef(Tl, 16);
         x86::Mem src_ptr = getCARRef(boxed_ptr, 16);
-        preserve_cache([&]() {
-            a.vpermilpd(x86::xmm0, src_ptr, 1); /* Load and swap */
-            a.vmovups(dst_ptr, x86::xmm0);
-            invalidate_cache(getArgRef(Hd));
-            invalidate_cache(getArgRef(Tl));
-        });
+        preserve_cache(
+                [&]() {
+                    a.vpermilpd(x86::xmm0, src_ptr, 1); /* Load and swap */
+                    a.vmovups(dst_ptr, x86::xmm0);
+                },
+                getArgRef(Hd),
+                getArgRef(Tl));
         break;
     }
     case ArgVal::Relation::none:
@@ -339,7 +341,8 @@ void BeamModuleAssembler::emit_get_list(const x86::Gp src,
                     a.mov(ARG2, getCARRef(boxed_ptr));
                     a.mov(ARG3, getCDRRef(boxed_ptr));
                 },
-                {ARG2, ARG3});
+                ARG2,
+                ARG3);
         mov_arg(Hd, ARG2);
         mov_arg(Tl, ARG3);
         break;
@@ -484,7 +487,7 @@ void BeamModuleAssembler::emit_i_get_tuple_element(const ArgSource &Src,
             [&]() {
                 a.mov(tmp_reg, emit_boxed_val(ARG2, Element.get()));
             },
-            {tmp_reg});
+            tmp_reg);
     mov_arg(Dst, tmp_reg);
 }
 
@@ -502,7 +505,8 @@ void BeamModuleAssembler::emit_get_tuple_element_swap(
                 mov_arg(ARG1, OtherDst);
                 a.mov(ARG3, emit_boxed_val(ARG2, Element.get()));
             },
-            {ARG1, ARG3});
+            ARG1,
+            ARG3);
     mov_arg(Dst, ARG1);
     mov_arg(OtherDst, ARG3);
 }
@@ -523,12 +527,13 @@ void BeamModuleAssembler::emit_get_two_tuple_elements(const ArgSource &Src,
     switch (ArgVal::memory_relation(Dst1, Dst2)) {
     case ArgVal::Relation::consecutive: {
         x86::Mem dst_ptr = getArgRef(Dst1, 16);
-        preserve_cache([&]() {
-            vmovups(x86::xmm0, element_ptr);
-            vmovups(dst_ptr, x86::xmm0);
-            invalidate_cache(getArgRef(Dst1));
-            invalidate_cache(getArgRef(Dst2));
-        });
+        preserve_cache(
+                [&]() {
+                    vmovups(x86::xmm0, element_ptr);
+                    vmovups(dst_ptr, x86::xmm0);
+                },
+                getArgRef(Dst1),
+                getArgRef(Dst2));
         break;
     }
     case ArgVal::Relation::reverse_consecutive: {
@@ -536,12 +541,15 @@ void BeamModuleAssembler::emit_get_two_tuple_elements(const ArgSource &Src,
             goto fallback;
         } else {
             x86::Mem dst_ptr = getArgRef(Dst2, 16);
-            preserve_cache([&]() {
-                a.vpermilpd(x86::xmm0, element_ptr, 1); /* Load and swap */
-                a.vmovups(dst_ptr, x86::xmm0);
-                invalidate_cache(getArgRef(Dst1));
-                invalidate_cache(getArgRef(Dst2));
-            });
+            preserve_cache(
+                    [&]() {
+                        a.vpermilpd(x86::xmm0,
+                                    element_ptr,
+                                    1); /* Load and swap */
+                        a.vmovups(dst_ptr, x86::xmm0);
+                    },
+                    getArgRef(Dst1),
+                    getArgRef(Dst2));
             break;
         }
     }
@@ -643,7 +651,7 @@ void BeamModuleAssembler::emit_i_trim(const ArgWord &Words) {
                 [&]() {
                     a.add(E, imm(Words.get() * sizeof(Eterm)));
                 },
-                {E});
+                E);
     }
 }
 
@@ -668,24 +676,26 @@ void BeamModuleAssembler::emit_move_two_words(const ArgSource &Src1,
     switch (ArgVal::memory_relation(Dst1, Dst2)) {
     case ArgVal::Relation::consecutive: {
         x86::Mem dst_ptr = getArgRef(Dst1, 16);
-        preserve_cache([&]() {
-            vmovups(x86::xmm0, src_ptr);
-            vmovups(dst_ptr, x86::xmm0);
-            invalidate_cache(getArgRef(Dst1));
-            invalidate_cache(getArgRef(Dst2));
-        });
+        preserve_cache(
+                [&]() {
+                    vmovups(x86::xmm0, src_ptr);
+                    vmovups(dst_ptr, x86::xmm0);
+                },
+                getArgRef(Dst1),
+                getArgRef(Dst2));
         break;
     }
     case ArgVal::Relation::reverse_consecutive: {
         x86::Mem dst_ptr = getArgRef(Dst2, 16);
         comment("(moving and swapping)");
         if (hasCpuFeature(CpuFeatures::X86::kAVX)) {
-            preserve_cache([&]() {
-                a.vpermilpd(x86::xmm0, src_ptr, 1); /* Load and swap */
-                a.vmovups(dst_ptr, x86::xmm0);
-                invalidate_cache(getArgRef(Dst1));
-                invalidate_cache(getArgRef(Dst2));
-            });
+            preserve_cache(
+                    [&]() {
+                        a.vpermilpd(x86::xmm0, src_ptr, 1); /* Load and swap */
+                        a.vmovups(dst_ptr, x86::xmm0);
+                    },
+                    getArgRef(Dst1),
+                    getArgRef(Dst2));
         } else {
             mov_arg(ARG1, Src1);
             mov_arg(ARG2, Src2);
@@ -710,23 +720,25 @@ void BeamModuleAssembler::emit_swap(const ArgRegister &R1,
     case ArgVal::Relation::consecutive: {
         x86::Mem ptr = getArgRef(R1, 16);
         comment("(swapping using AVX)");
-        preserve_cache([&]() {
-            a.vpermilpd(x86::xmm0, ptr, 1); /* Load and swap */
-            a.vmovups(ptr, x86::xmm0);
-            invalidate_cache(getArgRef(R1));
-            invalidate_cache(getArgRef(R2));
-        });
+        preserve_cache(
+                [&]() {
+                    a.vpermilpd(x86::xmm0, ptr, 1); /* Load and swap */
+                    a.vmovups(ptr, x86::xmm0);
+                },
+                getArgRef(R1),
+                getArgRef(R2));
         break;
     }
     case ArgVal::Relation::reverse_consecutive: {
         x86::Mem ptr = getArgRef(R2, 16);
         comment("(swapping using AVX)");
-        preserve_cache([&]() {
-            a.vpermilpd(x86::xmm0, ptr, 1); /* Load and swap */
-            a.vmovups(ptr, x86::xmm0);
-            invalidate_cache(getArgRef(R1));
-            invalidate_cache(getArgRef(R2));
-        });
+        preserve_cache(
+                [&]() {
+                    a.vpermilpd(x86::xmm0, ptr, 1); /* Load and swap */
+                    a.vmovups(ptr, x86::xmm0);
+                },
+                getArgRef(R1),
+                getArgRef(R2));
         break;
     }
     case ArgVal::Relation::none:
@@ -748,7 +760,7 @@ void BeamModuleAssembler::emit_node(const ArgRegister &Dst) {
                 a.mov(reg, x86::qword_ptr(reg));
                 a.mov(reg, x86::qword_ptr(reg, offsetof(ErlNode, sysname)));
             },
-            {reg});
+            reg);
     mov_arg(Dst, reg);
 }
 
@@ -789,7 +801,7 @@ void BeamModuleAssembler::emit_put_cons(const ArgSource &Hd,
             [&]() {
                 a.lea(ARG2, x86::qword_ptr(HTOP, TAG_PRIMARY_LIST));
             },
-            {ARG2});
+            ARG2);
 }
 
 void BeamModuleAssembler::emit_append_cons(const ArgWord &Index,
@@ -801,7 +813,7 @@ void BeamModuleAssembler::emit_append_cons(const ArgWord &Index,
                 a.mov(x86::qword_ptr(HTOP, offset + sizeof(Eterm)), ARG2);
                 a.lea(ARG2, x86::qword_ptr(HTOP, offset + TAG_PRIMARY_LIST));
             },
-            {ARG2});
+            ARG2);
 }
 
 void BeamModuleAssembler::emit_store_cons(const ArgWord &Len,
@@ -810,7 +822,7 @@ void BeamModuleAssembler::emit_store_cons(const ArgWord &Len,
             [&]() {
                 a.add(HTOP, imm(Len.get() * sizeof(Eterm[2])));
             },
-            {HTOP});
+            HTOP);
     mov_arg(Dst, ARG2);
 }
 
@@ -897,7 +909,8 @@ void BeamModuleAssembler::emit_put_tuple2(const ArgRegister &Dst,
                 a.lea(tmp_reg, x86::qword_ptr(HTOP, TAG_PRIMARY_BOXED));
                 a.add(HTOP, imm((size + 1) * sizeof(Eterm)));
             },
-            {HTOP, tmp_reg});
+            HTOP,
+            tmp_reg);
 
     mov_arg(Dst, tmp_reg);
 }
@@ -909,7 +922,7 @@ void BeamModuleAssembler::emit_self(const ArgRegister &Dst) {
             [&]() {
                 a.mov(reg, x86::qword_ptr(c_p, offsetof(Process, common.id)));
             },
-            {reg});
+            reg);
 
     mov_arg(Dst, reg);
 }
@@ -1016,7 +1029,7 @@ void BeamModuleAssembler::emit_is_atom(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_IMMED2_ATOM));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
     }
 }
 
@@ -1053,7 +1066,7 @@ void BeamModuleAssembler::emit_is_bitstring(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_HEADER_HEAP_BITS));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
     }
 }
 
@@ -1084,7 +1097,8 @@ void BeamModuleAssembler::emit_is_binary(const ArgLabel &Fail,
                                          offsetof(ErlSubBits, start)));
                 }
             },
-            {RET, ARG2});
+            RET,
+            ARG2);
 
     a.bind(not_sub_bits);
 
@@ -1099,7 +1113,7 @@ void BeamModuleAssembler::emit_is_binary(const ArgLabel &Fail,
                 ERTS_CT_ASSERT((7u << (32 - 3)) > _BITSTRING_TAG_MASK);
                 a.shl(RETd, imm(32 - 3));
             },
-            {RET});
+            RET);
 
     if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Bitstring) {
         comment("skipped header test since we know it's a bitstring when "
@@ -1111,7 +1125,7 @@ void BeamModuleAssembler::emit_is_binary(const ArgLabel &Fail,
                     a.or_(ARG2d, RETd);
                     a.cmp(ARG2d, imm(_TAG_HEADER_HEAP_BITS));
                 },
-                {ARG2});
+                ARG2);
     }
 
     preserve_cache([&]() {
@@ -1206,7 +1220,7 @@ void BeamModuleAssembler::emit_is_integer(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
 
         return;
     }
@@ -1226,7 +1240,7 @@ void BeamModuleAssembler::emit_is_integer(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
                     a.short_().je(next);
                 },
-                {RET});
+                RET);
 
         emit_is_boxed(resolve_beam_label(Fail), Src, RET);
     }
@@ -1245,7 +1259,7 @@ void BeamModuleAssembler::emit_is_integer(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_HEADER_POS_BIG));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
     }
 
     a.bind(next);
@@ -1284,7 +1298,7 @@ void BeamModuleAssembler::emit_is_map(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_HEADER_MAP));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
     }
 }
 
@@ -1351,7 +1365,7 @@ void BeamModuleAssembler::emit_is_pid(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_IMMED1_PID));
                     a.short_().je(next);
                 },
-                {RET});
+                RET);
 
         /* Reuse RET as the important bits are still available. */
         emit_is_boxed(resolve_beam_label(Fail), Src, RET);
@@ -1368,7 +1382,7 @@ void BeamModuleAssembler::emit_is_pid(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_HEADER_EXTERNAL_PID));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
     }
 
     a.bind(next);
@@ -1427,7 +1441,7 @@ void BeamModuleAssembler::emit_is_reference(const ArgLabel &Fail,
                     a.cmp(RETb, imm(_TAG_HEADER_EXTERNAL_REF));
                     a.jne(resolve_beam_label(Fail));
                 },
-                {RET});
+                RET);
 
         a.bind(next);
     }
@@ -1557,7 +1571,7 @@ void BeamModuleAssembler::emit_i_is_tuple_of_arity_ff(const ArgLabel &NotTuple,
                     a.cmp(RETd, imm(Arity.get()));
                     a.jne(resolve_beam_label(BadArity));
                 },
-                {RET});
+                RET);
     }
 }
 
@@ -2586,7 +2600,7 @@ void BeamModuleAssembler::emit_is_in_range(ArgLabel const &Small,
                         RET);
                     a.ja(resolve_beam_label(Small));
                 },
-                {ARG1});
+                ARG1);
     } else {
         preserve_cache([&]() {
             cmp(ARG1, Min.as<ArgImmed>().get(), RET);
@@ -2755,7 +2769,7 @@ void BeamModuleAssembler::emit_is_int_in_range(ArgLabel const &Fail,
                 a.test(RETb, imm(_TAG_IMMED1_MASK));
                 a.jne(resolve_beam_label(Fail));
             },
-            {RET});
+            RET);
     cmp(RET, Max.as<ArgImmed>().get() - Min.as<ArgImmed>().get(), ARG1);
     preserve_cache([&]() {
         a.ja(resolve_beam_label(Fail));
@@ -2790,7 +2804,7 @@ void BeamModuleAssembler::emit_is_int_ge(ArgLabel const &Fail,
                     a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
                     a.short_().je(small);
                 },
-                {RET});
+                RET);
 
         emit_is_boxed(resolve_beam_label(Fail), Src, src_reg);
     }
@@ -2811,7 +2825,7 @@ void BeamModuleAssembler::emit_is_int_ge(ArgLabel const &Fail,
                 cmp(src_reg, Min.as<ArgImmed>().get(), RET);
                 a.short_().jl(fail);
             },
-            {RET});
+            RET);
 
     a.bind(next);
 }
