@@ -4486,6 +4486,8 @@ from_form({type, _Anno, no_return, []}, _S, _D, L, C) ->
   {t_unit(), L, C};
 from_form({type, _Anno, node, []}, _S, _D, L, C) ->
   {t_node(), L, C};
+%from_form({type, _Anno, nominal, A}, _S, _D, _L, _C) -> 
+%  io:format("~p",[A]);
 from_form({type, _Anno, nominal, [{atom, _Anno1, Name},Type]}, S, D, L, C) -> 
   {T, L1, C1} = from_form(Type, S, D, L, C),
   {t_nominal(Name, T), L1, C1};
