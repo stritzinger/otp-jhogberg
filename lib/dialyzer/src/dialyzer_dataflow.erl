@@ -29,7 +29,7 @@
 
 -import(erl_types,
         [t_inf/2, t_inf/3, t_inf_lists/2, t_inf_lists/3,
-         t_is_equal/2, t_is_subtype/2, t_subtract/2,
+         t_is_equal/2, t_subtract/2,
          t_sup/1, t_sup/2]).
 
 -import(erl_types,
@@ -1268,9 +1268,9 @@ do_clause(C, Arg, ArgType, OrigArgType, Map, State, Warns) ->
       %% Now test whether the guard will succeed.
       case bind_guard(Guard, Map3, State) of
 	{error, Reason} ->
-	  ?debug("Failed guard: ~ts\n",
-		 [cerl_prettypr:format(C, [{hook, cerl_typean:pp_hook()}])]),
-          Warn = clause_guard_error(State, Reason, C, Pats, ArgType),
+	  ?debug("Failed guard: ~p\n",
+		 [C]),
+           Warn = clause_guard_error(State, Reason, C, Pats, ArgType),
           {State, Map, t_none(), NewArgType, [Warn|Warns]};
         Map4 ->
           Body = cerl:clause_body(C),
@@ -1878,11 +1878,11 @@ handle_guard_type_test(Guard, TypeTestType, Map, Env, Eval, State) ->
   {Map1, ArgType} = bind_guard(Arg, Map, Env, dont_know, State),
   case bind_type_test(Eval, TypeTestType, ArgType, State) of
     error ->
-      ?debug("Type test: ~w failed\n", [F]),
+      ?debug("Type test: ~w failed\n", [Guard]),
       signal_guard_fail(Eval, Guard, [ArgType], State);
     {ok, NewArgType, Ret} ->
       ?debug("Type test: ~w succeeded, NewType: ~ts, Ret: ~ts\n",
-	     [F, t_to_string(NewArgType), t_to_string(Ret)]),
+	     [Guard, t_to_string(NewArgType), t_to_string(Ret)]),
       {enter_type(Arg, NewArgType, Map1), Ret}
   end.
 
@@ -2232,13 +2232,13 @@ bind_eqeq_guard_lit_other(Guard, Arg1, Arg2, Map, Env, State) ->
     Term ->
       LitType = t_from_term(Term),
       {Map1, Type} = bind_guard(Arg2, Map, Env, Eval, State),
-      case t_is_subtype(LitType, Type) of
-	false -> signal_guard_fail(Eval, Guard, [Type, LitType], State);
-	true ->
-	  case cerl:is_c_var(Arg2) of
-	    true -> {enter_type(Arg2, LitType, Map1), t_atom(true)};
-	    false -> {Map1, t_atom(true)}
-	  end
+      case t_is_none(t_inf(LitType, Type)) of
+    true -> signal_guard_fail(Eval, Guard, [Type, LitType], State);
+    false ->
+      case cerl:is_c_var(Arg2) of
+        true -> {enter_type(Arg2, LitType, Map1), t_atom(true)};
+        false -> {Map1, t_atom(true)}
+      end
       end
   end.
 

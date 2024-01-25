@@ -158,6 +158,7 @@
 	 t_module/0,
 	 t_nil/0,
 	 t_node/0,
+   t_nominal/2,
 	 t_none/0,
 	 t_nonempty_binary/0,
 	 t_nonempty_bitstring/0,
@@ -257,6 +258,8 @@
 -define(binary_tag,     binary).
 -define(function_tag,   function).
 -define(identifier_tag, identifier).
+-define(nominal_tag,    nominal).
+-define(nominal_set_tag,nominal_set).
 -define(list_tag,       list).
 -define(map_tag,        map).
 -define(nil_tag,        nil).
@@ -269,7 +272,7 @@
 -define(var_tag,        var).
 
 -type tag()  :: ?atom_tag | ?binary_tag | ?function_tag | ?identifier_tag
-              | ?list_tag | ?map_tag | ?nil_tag | ?number_tag
+              | ?list_tag | ?map_tag | ?nil_tag | ?number_tag | ?nominal_tag | ?nominal_set_tag
               | ?opaque_tag | ?product_tag
               | ?tuple_tag | ?tuple_set_tag | ?union_tag | ?var_tag.
 
@@ -297,6 +300,7 @@
 	    qualifier = ?unknown_qual :: qual()}).
 
 -opaque erl_type() :: ?any | ?none | ?unit | #c{}.
+% Infinite loop
 
 %%-----------------------------------------------------------------------------
 %% Auxiliary types and convenient macros
@@ -320,6 +324,8 @@
 -define(integer(Types),            ?number(Types, ?integer_qual)).
 -define(int_range(From, To),       ?integer(#int_rng{from=From, to=To})).
 -define(int_set(Set),              ?integer(#int_set{set=Set})).
+-define(nominal(Name, Types),      #c{tag=?nominal_tag, elements={Name,Types}}).
+-define(nominal_set(Nominals, Structurals),     #c{tag=?nominal_set_tag, elements={Nominals, Structurals}}).
 -define(list(Types, Term, Size),   #c{tag=?list_tag, elements={Types,Term},
 				      qualifier=Size}).
 -define(nil,                       #c{tag=?nil_tag}).
@@ -345,7 +351,7 @@
 
 -type file_line()    :: {file:name(), erl_anno:line()}.
 -type record_key()   :: {'record', atom()}.
--type type_key()     :: {'type' | 'opaque', atom(), arity()}.
+-type type_key()     :: {'type' | 'opaque' | 'nominal', atom(), arity()}.
 -type field()        :: {atom(), erl_parse:abstract_expr(), erl_type()}.
 -type record_value() :: {file_line(),
                          [{RecordSize :: non_neg_integer(), [field()]}]}.
@@ -494,6 +500,10 @@ t_contains_opaque(?tuple_set(_Set) = T, Opaques) ->
   list_contains_opaque(t_tuple_subtypes(T), Opaques);
 t_contains_opaque(?union(List), Opaques) ->
   list_contains_opaque(List, Opaques);
+t_contains_opaque(?nominal(_, Structure), Opaques) ->
+  t_contains_opaque(Structure, Opaques);
+t_contains_opaque(?nominal_set(_, Structure), Opaques) -> 
+  t_contains_opaque(Structure, Opaques);
 t_contains_opaque(?var(_Id), _Opaques) -> false.
 
 -spec list_contains_opaque([erl_type()], [erl_type()]) -> boolean().
@@ -604,152 +614,10 @@ t_find_unknown_opaque(T1, T2, Opaques) ->
 %% The first argument can contain opaque types. The second argument
 %% is assumed to be taken from the contract.
 
-t_decorate_with_opaque(T1, T2, Opaques) ->
-  case
-    Opaques =:= [] orelse t_is_equal(T1, T2) orelse not t_contains_opaque(T2)
-  of
-    true -> T1;
-    false ->
-      T = t_inf(T1, T2),
-      case t_contains_opaque(T) of
-        false -> T1;
-        true ->
-          R = decorate(T1, T, Opaques),
-          ?debug(case catch
-                        not t_is_equal(t_unopaque(R), t_unopaque(T1))
-                        orelse
-                        t_is_equal(T1, T) andalso not t_is_equal(T1, R)
-                 of
-                   false -> ok;
-                   _ ->
-                     io:format("T1 = ~p,\n", [T1]),
-                     io:format("T2 = ~p,\n", [T2]),
-                     io:format("O = ~p,\n", [Opaques]),
-                     io:format("erl_types:t_decorate_with_opaque(T1,T2,O).\n"),
-                     throw({error, "Failed to handle opaque types"})
-                 end),
-          R
-      end
-  end.
+t_decorate_with_opaque(T1, _, _) -> t_unopaque(T1).
 
-decorate(Type, ?none, _Opaques) -> Type;
-decorate(?function(Domain, Range), ?function(D, R), Opaques) ->
-  ?function(decorate(Domain, D, Opaques), decorate(Range, R, Opaques));
-decorate(?list(Types, Tail, Size), ?list(Ts, Tl, _Sz), Opaques) ->
-  ?list(decorate(Types, Ts, Opaques), decorate(Tail, Tl, Opaques), Size);
-decorate(?product(Types), ?product(Ts), Opaques) ->
-  ?product(list_decorate(Types, Ts, Opaques));
-decorate(?tuple(_, _, _)=T, ?tuple(?any, _, _), _Opaques) -> T;
-decorate(?tuple(?any, _, _)=T, ?tuple(_, _, _), _Opaques) -> T;
-decorate(?tuple(Types, Arity, Tag), ?tuple(Ts, Arity, _), Opaques) ->
-  ?tuple(list_decorate(Types, Ts, Opaques), Arity, Tag);
-decorate(?tuple_set(List), ?tuple(_, Arity, _) = T, Opaques) ->
-  decorate_tuple_sets(List, [{Arity, [T]}], Opaques);
-decorate(?tuple_set(List), ?tuple_set(L), Opaques) ->
-  decorate_tuple_sets(List, L, Opaques);
-decorate(?union(List), T, Opaques) when T =/= ?any ->
-  ?union(L) = force_union(T),
-  union_decorate(List, L, Opaques);
-decorate(T, ?union(L), Opaques) when T =/= ?any ->
-  ?union(List) = force_union(T),
-  union_decorate(List, L, Opaques);
-decorate(Type, ?opaque(_)=T, Opaques) ->
-  decorate_with_opaque(Type, T, Opaques);
-decorate(Type, _T, _Opaques) -> Type.
 
-%% Note: it is important that #opaque.struct is a subtype of the
-%% opaque type.
-decorate_with_opaque(Type, ?opaque(Set2), Opaques) ->
-  case decoration(Set2, Type, Opaques, [], false) of
-    {[], false} -> Type;
-    {List, All} when List =/= [] ->
-      NewType = sup_opaque(List),
-      case All of
-        true -> NewType;
-        false -> t_sup(NewType, Type)
-      end
-  end.
 
-decoration([#opaque{struct = S} = Opaque|OpaqueTypes], Type, Opaques,
-           NewOpaqueTypes0, All) ->
-  IsOpaque = is_opaque_type2(Opaque, Opaques),
-  I = t_inf(Type, S),
-  case not IsOpaque orelse t_is_none(I) of
-    true -> decoration(OpaqueTypes, Type, Opaques, NewOpaqueTypes0, All);
-    false ->
-      NewI = decorate(I, S, Opaques),
-      NewOpaque = combine(NewI, [Opaque]),
-      NewAll = All orelse t_is_equal(I, Type),
-      NewOpaqueTypes = NewOpaque ++ NewOpaqueTypes0,
-      decoration(OpaqueTypes, Type, Opaques, NewOpaqueTypes, NewAll)
-  end;
-decoration([], _Type, _Opaques, NewOpaqueTypes, All) ->
-  {NewOpaqueTypes, All}.
-
--spec list_decorate([erl_type()], [erl_type()], opaques()) -> [erl_type()].
-
-list_decorate(List, L, Opaques) ->
-  [decorate(Elem, E, Opaques) || {Elem, E} <- lists:zip(List, L)].
-
-union_decorate(U1, U2, Opaques) ->
-  Union = union_decorate(U1, U2, Opaques, 0, []),
-  ?untagged_union(A,B,F,I,L,N,T,_,Map) = U1,
-  ?untagged_union(_,_,_,_,_,_,_,Opaque,_) = U2,
-  List = [A,B,F,I,L,N,T,Map],
-  DecList = [Dec ||
-              E <- List,
-              not t_is_none(E),
-              not t_is_none(Dec = decorate(E, Opaque, Opaques))],
-  t_sup([Union|DecList]).
-
-union_decorate([?none|Left1], [_|Left2], Opaques, N, Acc) ->
-  union_decorate(Left1, Left2, Opaques, N, [?none|Acc]);
-union_decorate([T1|Left1], [?none|Left2], Opaques, N, Acc) ->
-  union_decorate(Left1, Left2, Opaques, N+1, [T1|Acc]);
-union_decorate([T1|Left1], [T2|Left2], Opaques, N, Acc) ->
-  union_decorate(Left1, Left2, Opaques, N+1, [decorate(T1, T2, Opaques)|Acc]);
-union_decorate([], [], _Opaques, N, Acc) ->
-  if N =:= 0 -> ?none;
-     N =:= 1 ->
-      [Type] = [T || T <- Acc, T =/= ?none],
-      Type;
-     N >= 2  -> ?union(lists:reverse(Acc))
-  end.
-
-decorate_tuple_sets(List, L, Opaques) ->
-  decorate_tuple_sets(List, L, Opaques, []).
-
-decorate_tuple_sets([{Arity, Tuples}|List], [{Arity, Ts}|L], Opaques, Acc) ->
-  DecTs = decorate_tuples_in_sets(Tuples, Ts, Opaques),
-  decorate_tuple_sets(List, L, Opaques, [{Arity, DecTs}|Acc]);
-decorate_tuple_sets([ArTup|List], L, Opaques, Acc) ->
-  decorate_tuple_sets(List, L, Opaques, [ArTup|Acc]);
-decorate_tuple_sets([], _L, _Opaques, Acc) ->
-  ?tuple_set(lists:reverse(Acc)).
-
-decorate_tuples_in_sets([?tuple(Elements, _, ?any)], Ts, Opaques) ->
-  NewList = [list_decorate(Elements, Es, Opaques) || ?tuple(Es, _, _) <- Ts],
-  case t_sup([t_tuple(Es) || Es <- NewList]) of
-    ?tuple_set([{_Arity, Tuples}]) -> Tuples;
-    ?tuple(_, _, _)=Tuple -> [Tuple]
-  end;
-decorate_tuples_in_sets(Tuples, Ts, Opaques) ->
-  decorate_tuples_in_sets(Tuples, Ts, Opaques, []).
-
-decorate_tuples_in_sets([?tuple(Elements, Arity, Tag1) = T1|Tuples] = L1,
-                        [?tuple(Es, Arity, Tag2)|Ts] = L2, Opaques, Acc) ->
-  if
-    Tag1 < Tag2   -> decorate_tuples_in_sets(Tuples, L2, Opaques, [T1|Acc]);
-    Tag1 > Tag2   -> decorate_tuples_in_sets(L1, Ts, Opaques, Acc);
-    Tag1 == Tag2 ->
-      NewElements = list_decorate(Elements, Es, Opaques),
-      NewAcc = [?tuple(NewElements, Arity, Tag1)|Acc],
-      decorate_tuples_in_sets(Tuples, Ts, Opaques, NewAcc)
-  end;
-decorate_tuples_in_sets([T1|Tuples], L2, Opaques, Acc) ->
-  decorate_tuples_in_sets(Tuples, L2, Opaques, [T1|Acc]);
-decorate_tuples_in_sets([], _L, _Opaques, Acc) ->
-  lists:reverse(Acc).
 
 -spec t_opaque_from_records(type_table()) -> [erl_type()].
 
@@ -1327,6 +1195,7 @@ t_cons_hd(Type) ->
 t_cons_hd(Type, Opaques) ->
   do_opaque(Type, Opaques, fun cons_hd/1).
 
+cons_hd(?nominal(_, List)) -> cons_hd(List);
 cons_hd(?nonempty_list(Contents, _Termination)) -> Contents.
 
 -spec t_cons_tl(erl_type()) -> erl_type().
@@ -1339,6 +1208,7 @@ t_cons_tl(Type) ->
 t_cons_tl(Type, Opaques) ->
   do_opaque(Type, Opaques, fun cons_tl/1).
 
+cons_tl(?nominal(_, List)) -> cons_tl(List);
 cons_tl(?nonempty_list(_Contents, Termination) = T) ->
   t_sup(Termination, T).
 
@@ -1359,6 +1229,20 @@ t_is_nil(Type, Opaques) ->
 
 is_nil(?nil) -> true;
 is_nil(_) -> false.
+
+-spec t_nominal(any(), erl_type()) -> erl_type().
+
+t_nominal(_, ?any) ->
+  ?any;
+t_nominal(Name, Types) -> 
+  ?nominal(Name, Types).
+
+-spec t_is_nominal(erl_type()) -> boolean().
+
+t_is_nominal(?nominal(_,_)) -> true; 
+t_is_nominal(_) -> false. 
+
+
 
 -spec t_list() -> erl_type().
 
@@ -1501,6 +1385,8 @@ t_widen_to_number(?map(Pairs, DefK, DefV)) ->
   t_map(L, t_widen_to_number(DefK), t_widen_to_number(DefV));
 t_widen_to_number(?nil) -> ?nil;
 t_widen_to_number(?number(_Set, _Tag)) -> t_number();
+t_widen_to_number(?nominal(N, S)) -> ?nominal(N, t_widen_to_number(S));
+t_widen_to_number(?nominal_set(N, S)) -> normalize_nominal_set([t_widen_to_number(Nom) || Nom <- N], t_widen_to_number(S), []);
 t_widen_to_number(?opaque(Set)) ->
   L = [Opaque#opaque{struct = t_widen_to_number(S)} ||
         #opaque{struct = S} = Opaque <- Set],
@@ -2216,6 +2102,10 @@ t_has_var(?list(Contents, ?nil, _)) ->
   t_has_var(Contents);
 t_has_var(?list(Contents, Termination, _)) ->
   t_has_var(Contents) orelse t_has_var(Termination);
+t_has_var(?nominal(_, S)) ->
+  t_has_var(S);
+t_has_var(?nominal_set(N, S)) ->
+  lists:any(fun t_has_var/1, N) andalso t_has_var(S);
 t_has_var(?product(Types)) -> t_has_var_list(Types);
 t_has_var(?tuple(?any, ?any, ?any)) -> false;
 t_has_var(?tuple(Elements, _, _)) ->
@@ -2264,6 +2154,10 @@ t_collect_var_names(?tuple_set(_) = TS, Acc) ->
 t_collect_var_names(?map(_, DefK, _) = Map, Acc0) ->
   Acc = t_collect_vars_list(map_all_values(Map), Acc0),
   t_collect_var_names(DefK, Acc);
+t_collect_var_names(?nominal(_, S), Acc) ->
+  t_collect_var_names(S, Acc);
+t_collect_var_names(?nominal_set(N, S), Acc) ->
+  t_collect_vars_list(N, t_collect_var_names(S, Acc));
 t_collect_var_names(?opaque(Set), Acc) ->
   t_collect_vars_list([O#opaque.struct || O <- Set], Acc);
 t_collect_var_names(?union(List), Acc) ->
@@ -2458,36 +2352,41 @@ t_sup1([], Type) ->
 
 -spec t_sup(erl_type(), erl_type()) -> erl_type().
 
-t_sup(?any, _) -> ?any;
-t_sup(_, ?any) -> ?any;
-t_sup(?none, T) -> T;
-t_sup(T, ?none) -> T;
-t_sup(?unit, T) -> T;
-t_sup(T, ?unit) -> T;
-t_sup(T, T) -> do_not_subst_all_vars_to_any(T);
-t_sup(?var(_), _) -> ?any;
-t_sup(_, ?var(_)) -> ?any;
-t_sup(?atom(Set1), ?atom(Set2)) ->
+t_sup(T1, T2) -> 
+  Res = t_sup_aux(T1, T2),
+  %{true, true, _, _, _} = {t_is_subtype(subst_all_vars_to_any(T1), Res), t_is_subtype(subst_all_vars_to_any(T2), Res), T1, T2, Res},
+  Res.
+
+t_sup_aux(?any, _) -> ?any;
+t_sup_aux(_, ?any) -> ?any;
+t_sup_aux(?none, T) -> T;
+t_sup_aux(T, ?none) -> T;
+t_sup_aux(?unit, T) -> T;
+t_sup_aux(T, ?unit) -> T;
+t_sup_aux(T, T) -> do_not_subst_all_vars_to_any(T);
+t_sup_aux(?var(_), _) -> ?any;
+t_sup_aux(_, ?var(_)) -> ?any;
+t_sup_aux(?atom(Set1), ?atom(Set2)) ->
   ?atom(set_union(Set1, Set2));
-t_sup(?bitstr(U1, B1), ?bitstr(U2, B2)) ->
+t_sup_aux(?bitstr(U1, B1), ?bitstr(U2, B2)) ->
   t_bitstr(gcd(gcd(U1, U2), abs(B1-B2)), lists:min([B1, B2]));
-t_sup(?function(Domain1, Range1), ?function(Domain2, Range2)) ->
+t_sup_aux(?function(Domain1, Range1), ?function(Domain2, Range2)) ->
   %% The domain is either a product or any.
-  ?function(t_sup(Domain1, Domain2), t_sup(Range1, Range2));
-t_sup(?identifier(Set1), ?identifier(Set2)) ->
+  ?function(t_sup_aux(Domain1, Domain2), t_sup_aux(Range1, Range2));
+t_sup_aux(?identifier(Set1), ?identifier(Set2)) ->
   ?identifier(set_union(Set1, Set2));
-t_sup(?opaque(Set1), ?opaque(Set2)) ->
+t_sup_aux(?opaque(Set1), ?opaque(Set2)) ->
   sup_opaque(ordsets:union(Set1, Set2));
 %%Disallow unions with opaque types
-%%t_sup(T1=?opaque(_,_,_), T2) ->
-%%  io:format("Debug: t_sup executed with args ~w and ~w~n",[T1, T2]), ?none;
-%%t_sup(T1, T2=?opaque(_,_,_)) ->
-%%  io:format("Debug: t_sup executed with args ~w and ~w~n",[T1, T2]), ?none;
-t_sup(?nil, ?list(Contents, Termination, _)) ->
-  ?list(Contents, t_sup(?nil, Termination), ?unknown_qual);
-t_sup(?list(Contents, Termination, _), ?nil) ->
-  ?list(Contents, t_sup(?nil, Termination), ?unknown_qual);
-t_sup(?list(Contents1, Termination1, Size1),
+%%t_sup_aux(T1=?opaque(_,_,_), T2) ->
+%%  io:format("Debug: t_sup_aux executed with args ~w and ~w~n",[T1, T2]), ?none;
+%%t_sup_aux(T1, T2=?opaque(_,_,_)) ->
+%%  io:format("Debug: t_sup_aux executed with args ~w and ~w~n",[T1, T2]), ?none;
+t_sup_aux(?nil, ?list(Contents, Termination, _)) ->
+  ?list(Contents, t_sup_aux(?nil, Termination), ?unknown_qual);
+t_sup_aux(?list(Contents, Termination, _), ?nil) ->
+  ?list(Contents, t_sup_aux(?nil, Termination), ?unknown_qual);
+t_sup_aux(?list(Contents1, Termination1, Size1),
       ?list(Contents2, Termination2, Size2)) ->
   NewSize =
     case {Size1, Size2} of
@@ -2496,43 +2395,43 @@ t_sup(?list(Contents1, Termination1, Size1),
       {?nonempty_qual, ?unknown_qual} -> ?unknown_qual;
       {?nonempty_qual, ?nonempty_qual} -> ?nonempty_qual
     end,
-  NewContents = t_sup(Contents1, Contents2),
-  NewTermination = t_sup(Termination1, Termination2),
+  NewContents = t_sup_aux(Contents1, Contents2),
+  NewTermination = t_sup_aux(Termination1, Termination2),
   ?list(NewContents, NewTermination, NewSize);
-t_sup(?number(_, _), ?number(?any, ?unknown_qual) = T) -> T;
-t_sup(?number(?any, ?unknown_qual) = T, ?number(_, _)) -> T;
-t_sup(?float, ?integer(_)) -> t_number();
-t_sup(?integer(_), ?float) -> t_number();
-t_sup(?integer(?any) = T, ?integer(_)) -> T;
-t_sup(?integer(_), ?integer(?any) = T) -> T;
-t_sup(?int_set(Set1), ?int_set(Set2)) ->
+t_sup_aux(?number(_, _), ?number(?any, ?unknown_qual) = T) -> T;
+t_sup_aux(?number(?any, ?unknown_qual) = T, ?number(_, _)) -> T;
+t_sup_aux(?float, ?integer(_)) -> t_number();
+t_sup_aux(?integer(_), ?float) -> t_number();
+t_sup_aux(?integer(?any) = T, ?integer(_)) -> T;
+t_sup_aux(?integer(_), ?integer(?any) = T) -> T;
+t_sup_aux(?int_set(Set1), ?int_set(Set2)) ->
   case set_union(Set1, Set2) of
     ?any ->
       t_from_range(min(set_min(Set1), set_min(Set2)),
 		   max(set_max(Set1), set_max(Set2)));
     Set -> ?int_set(Set)
   end;
-t_sup(?int_range(From1, To1), ?int_range(From2, To2)) ->
+t_sup_aux(?int_range(From1, To1), ?int_range(From2, To2)) ->
   t_from_range(min(From1, From2), max(To1, To2));
-t_sup(Range = ?int_range(_, _), ?int_set(Set)) ->
+t_sup_aux(Range = ?int_range(_, _), ?int_set(Set)) ->
   expand_range_from_set(Range, Set);
-t_sup(?int_set(Set), Range = ?int_range(_, _)) ->
+t_sup_aux(?int_set(Set), Range = ?int_range(_, _)) ->
   expand_range_from_set(Range, Set);
-t_sup(?product(Types1), ?product(Types2)) ->
+t_sup_aux(?product(Types1), ?product(Types2)) ->
   L1 = length(Types1),
   L2 = length(Types2),
   if L1 =:= L2 -> ?product(t_sup_lists(Types1, Types2));
      true -> ?any
   end;
-t_sup(?product(_), _) ->
+t_sup_aux(?product(_), _) ->
   ?any;
-t_sup(_, ?product(_)) ->
+t_sup_aux(_, ?product(_)) ->
   ?any;
-t_sup(?tuple(?any, ?any, ?any) = T, ?tuple(_, _, _)) -> T;
-t_sup(?tuple(_, _, _), ?tuple(?any, ?any, ?any) = T) -> T;
-t_sup(?tuple(?any, ?any, ?any) = T, ?tuple_set(_)) -> T;
-t_sup(?tuple_set(_), ?tuple(?any, ?any, ?any) = T) -> T;
-t_sup(?tuple(Elements1, Arity, Tag1) = T1,
+t_sup_aux(?tuple(?any, ?any, ?any) = T, ?tuple(_, _, _)) -> T;
+t_sup_aux(?tuple(_, _, _), ?tuple(?any, ?any, ?any) = T) -> T;
+t_sup_aux(?tuple(?any, ?any, ?any) = T, ?tuple_set(_)) -> T;
+t_sup_aux(?tuple_set(_), ?tuple(?any, ?any, ?any) = T) -> T;
+t_sup_aux(?tuple(Elements1, Arity, Tag1) = T1,
       ?tuple(Elements2, Arity, Tag2) = T2) ->
   if Tag1 == Tag2 -> t_tuple(t_sup_lists(Elements1, Elements2));
      Tag1 == ?any -> t_tuple(t_sup_lists(Elements1, Elements2));
@@ -2540,22 +2439,50 @@ t_sup(?tuple(Elements1, Arity, Tag1) = T1,
      Tag1 < Tag2 -> ?tuple_set([{Arity, [T1, T2]}]);
      Tag1 > Tag2 -> ?tuple_set([{Arity, [T2, T1]}])
   end;
-t_sup(?tuple(_, Arity1, _) = T1, ?tuple(_, Arity2, _) = T2) ->
+t_sup_aux(?tuple(_, Arity1, _) = T1, ?tuple(_, Arity2, _) = T2) ->
   sup_tuple_sets([{Arity1, [T1]}], [{Arity2, [T2]}]);
-t_sup(?tuple_set(List1), ?tuple_set(List2)) ->
+t_sup_aux(?tuple_set(List1), ?tuple_set(List2)) ->
   sup_tuple_sets(List1, List2);
-t_sup(?tuple_set(List1), T2 = ?tuple(_, Arity, _)) ->
+t_sup_aux(?tuple_set(List1), T2 = ?tuple(_, Arity, _)) ->
   sup_tuple_sets(List1, [{Arity, [T2]}]);
-t_sup(?tuple(_, Arity, _) = T1, ?tuple_set(List2)) ->
+t_sup_aux(?tuple(_, Arity, _) = T1, ?tuple_set(List2)) ->
   sup_tuple_sets([{Arity, [T1]}], List2);
-t_sup(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
+t_sup_aux(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
   Pairs =
     map_pairwise_merge(
-      fun(K, MNess, V1, MNess, V2) -> {K, MNess, t_sup(V1, V2)};
-	 (K, _,     V1, _,     V2) -> {K, ?opt,  t_sup(V1, V2)}
+      fun(K, MNess, V1, MNess, V2) -> {K, MNess, t_sup_aux(V1, V2)};
+	 (K, _,     V1, _,     V2) -> {K, ?opt,  t_sup_aux(V1, V2)}
       end, A, B),
-  t_map(Pairs, t_sup(ADefK, BDefK), t_sup(ADefV, BDefV));
-t_sup(T1, T2) ->
+  t_map(Pairs, t_sup_aux(ADefK, BDefK), t_sup_aux(ADefV, BDefV));
+%% Union of 1 or more nominal types/nominal sets
+t_sup_aux(?nominal(Name,S1), ?nominal(Name,S2)) ->
+  ?nominal(Name, t_sup_aux(S1, S2));
+t_sup_aux(?nominal(N1,_)=T1, ?nominal(N2, _)=T2) ->
+  
+      if
+        N1 < N2   -> ?nominal_set([T1,T2],?none);
+        N1 > N2   -> ?nominal_set([T2,T1],?none)
+      end;
+t_sup_aux(?nominal_set(LHS_Ns, LHS_S), ?nominal_set(RHS_Ns, RHS_S)) ->
+  sup_nominal_sets(LHS_Ns, RHS_Ns, t_sup_aux(LHS_S, RHS_S));
+t_sup_aux(?nominal_set(LHS_Ns, LHS_S), ?nominal(_, _)=RHS) ->
+  sup_nominal_sets(LHS_Ns, [RHS], LHS_S);
+t_sup_aux(?nominal(_,_)=T1, ?nominal_set(_,_) = T2) ->
+  t_sup_aux(T2, T1);
+t_sup_aux(?nominal(_,S1)=T1, S2) ->
+  Inf = t_inf_aux(S1, S2, 'universe'),
+  case t_is_none_or_unit(Inf) of
+    true -> 
+      ?nominal_set([T1], S2);
+    false -> t_sup_aux(S1, S2)
+  end;
+t_sup_aux(S1, ?nominal(_,_)=T2) ->
+  t_sup_aux(T2,S1);
+t_sup_aux(?nominal_set(N1,S1),S2) ->
+  normalize_nominal_set(N1, t_sup_aux(S1,S2), []);
+t_sup_aux(S,?nominal_set(_,_)=T2) ->
+  t_sup_aux(T2,S);
+t_sup_aux(T1, T2) ->
   ?union(U1) = force_union(T1),
   ?union(U2) = force_union(T2),
   sup_union(U1, U2).
@@ -2587,6 +2514,54 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
   [t_sup(T1, T2)|t_sup_lists(Left1, Left2)];
 t_sup_lists([], []) ->
   [].
+
+sup_nominal_sets(Left, Right, Other) ->
+  normalize_nominal_set(sup_nominal_sets_1(Left, Right), Other, []).
+
+sup_nominal_sets_1([?nominal(Same, _) = LHS | Left],
+                   [?nominal(Same, _) = RHS | Right]) ->
+  Sup = t_sup(LHS, RHS),
+  [Sup | sup_nominal_sets_1(Left, Right)];
+sup_nominal_sets_1([?nominal(LHS_Name, LHS_S) = LHS | Left] = Left0,
+                   [?nominal(RHS_Name, RHS_S) = RHS | Right] = Right0) ->
+  case t_inf_aux(LHS, RHS, 'universe') of
+    ?nominal(LHS_Name, _) -> [?nominal(RHS_Name, t_sup(LHS_S, RHS_S)) | sup_nominal_sets_1(Left, Right)];
+    ?nominal(RHS_Name, _) -> [?nominal(LHS_Name, t_sup(LHS_S, RHS_S)) | sup_nominal_sets_1(Left, Right)];
+    ?none when LHS_Name < RHS_Name -> [LHS | sup_nominal_sets_1(Left, Right0)];
+    ?none -> [RHS | sup_nominal_sets_1(Left0, Right)]
+    end;
+sup_nominal_sets_1([_|_]=Left, []) ->
+  Left;
+sup_nominal_sets_1([], [_|_]=Right) ->
+  Right;
+sup_nominal_sets_1([], []) ->
+  [].
+
+normalize_nominal_set(_, ?any, _) ->
+  ?any;
+normalize_nominal_set([], Other, []) ->
+  false = t_is_nominal(Other), 
+  Other;
+normalize_nominal_set([], ?none, [?nominal(_,_) = N]) -> N;
+normalize_nominal_set([], Other, Nominals) ->
+  ?nominal_set(lists:reverse(Nominals), Other);
+normalize_nominal_set([?nominal(_,_)=Type | Types], ?none, Nominals) ->
+  normalize_nominal_set(Types, ?none, [Type | Nominals]);
+normalize_nominal_set([?none | Types], Other, Nominals) ->
+  normalize_nominal_set(Types, Other, Nominals);
+normalize_nominal_set([Type | Types], Other0, Nominals) ->
+  case t_sup_aux(Type, Other0) of
+    ?nominal_set(_,_) ->
+      %% The `Other` type does not overlap with the nominal type, include it
+      %% in the new nominal list.
+      ?nominal(_, _) = Type,                    %Assertion.
+      normalize_nominal_set(Types, Other0, [Type | Nominals]);
+    Other ->
+      %% `Type` is structural (can happen during limiting) or overlaps with
+      %% `Other0`, start over since the new `Other` type could overlap with
+      %% previously-handled nominals.
+      normalize_nominal_set(lists:reverse(Nominals, Types), Other, [])
+  end.
 
 sup_tuple_sets(L1, L2) ->
   TotalArities = ordsets:union([Arity || {Arity, _} <- L1],
@@ -2651,6 +2626,8 @@ sup_tuples_in_set([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_tuples_in_set(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_union(U1, U2) ->
+  true = length(U1) =:= length(U2), %Assertion.
+  true = ?num_types_in_union =:= length(U1), %Assertion
   sup_union(U1, U2, 0, []).
 
 sup_union([?none|Left1], [?none|Left2], N, Acc) ->
@@ -2665,7 +2642,10 @@ sup_union([], [], N, Acc) ->
       [Type] = [T || T <- Acc, T =/= ?none],
       Type;
     N =:= ?num_types_in_union ->
-      ?any;
+      case Acc == [t_tuple(), t_map(), ?any, t_number(), t_list(), t_identifier(), t_fun(), t_bitstr(), t_atom()] of
+        true -> ?any;
+        false -> ?union(lists:reverse(Acc))
+      end;
     true ->
       ?union(lists:reverse(Acc))
   end.
@@ -2704,6 +2684,8 @@ t_elements(?function(_, _) = T, _Opaques) -> [T];
 t_elements(?identifier(?any) = T, _Opaques) -> [T];
 t_elements(?identifier(IDs), _Opaques) ->
   [?identifier([T]) || T <- IDs];
+t_elements(?nominal(_,_) = T, _Opaques) -> [T];
+t_elements(?nominal_set(_,_) = T, _Opaques) -> [T];
 t_elements(?list(_, _, _) = T, _Opaques) -> [T];
 t_elements(?number(_, _) = T, _Opaques) ->
   case T of
@@ -2765,46 +2747,51 @@ t_inf(T1, T2) ->
 
 -spec t_inf(erl_type(), erl_type(), t_inf_opaques()) -> erl_type().
 
-t_inf(?var(_), ?var(_), _Opaques) -> ?any;
-t_inf(?var(_), T, _Opaques) -> do_not_subst_all_vars_to_any(T);
-t_inf(T, ?var(_), _Opaques) -> do_not_subst_all_vars_to_any(T);
-t_inf(?any, T, _Opaques) -> do_not_subst_all_vars_to_any(T);
-t_inf(T, ?any, _Opaques) -> do_not_subst_all_vars_to_any(T);
-t_inf(?none, _, _Opaques) -> ?none;
-t_inf(_, ?none, _Opaques) -> ?none;
-t_inf(?unit, _, _Opaques) -> ?unit;	% ?unit cases should appear below ?none
-t_inf(_, ?unit, _Opaques) -> ?unit;
-t_inf(T, T, _Opaques) -> do_not_subst_all_vars_to_any(T);
-t_inf(?atom(Set1), ?atom(Set2), _) ->
+t_inf(T1, T2, Opaques) -> 
+  Res = t_inf_aux(T1, T2, Opaques),
+  %{true, true, _, _, _} = {t_is_subtype(Res, subst_all_vars_to_any(T1)), t_is_subtype(Res, subst_all_vars_to_any(T2)), T1, T2, Res},
+  Res.
+
+t_inf_aux(?var(_), ?var(_), _Opaques) -> ?any;
+t_inf_aux(?var(_), T, _Opaques) -> do_not_subst_all_vars_to_any(T);
+t_inf_aux(T, ?var(_), _Opaques) -> do_not_subst_all_vars_to_any(T);
+t_inf_aux(?any, T, _Opaques) -> do_not_subst_all_vars_to_any(T);
+t_inf_aux(T, ?any, _Opaques) -> do_not_subst_all_vars_to_any(T);
+t_inf_aux(?none, _, _Opaques) -> ?none;
+t_inf_aux(_, ?none, _Opaques) -> ?none;
+t_inf_aux(?unit, _, _Opaques) -> ?unit;	% ?unit cases should appear below ?none
+t_inf_aux(_, ?unit, _Opaques) -> ?unit;
+t_inf_aux(T, T, _Opaques) -> do_not_subst_all_vars_to_any(T);
+t_inf_aux(?atom(Set1), ?atom(Set2), _) ->
   case set_intersection(Set1, Set2) of
     ?none ->  ?none;
     NewSet -> ?atom(NewSet)
   end;
-t_inf(?bitstr(U1, B1), ?bitstr(0, B2), _Opaques) ->
+t_inf_aux(?bitstr(U1, B1), ?bitstr(0, B2), _Opaques) ->
   if B2 >= B1 andalso (B2-B1) rem U1 =:= 0 -> t_bitstr(0, B2);
      true -> ?none
   end;
-t_inf(?bitstr(0, B1), ?bitstr(U2, B2), _Opaques) ->
+t_inf_aux(?bitstr(0, B1), ?bitstr(U2, B2), _Opaques) ->
   if B1 >= B2 andalso (B1-B2) rem U2 =:= 0 -> t_bitstr(0, B1);
      true -> ?none
   end;
-t_inf(?bitstr(U1, B1), ?bitstr(U1, B1), _Opaques) ->
+t_inf_aux(?bitstr(U1, B1), ?bitstr(U1, B1), _Opaques) ->
   t_bitstr(U1, B1);
-t_inf(?bitstr(U1, B1), ?bitstr(U2, B2), _Opaques) when U2 > U1 ->
+t_inf_aux(?bitstr(U1, B1), ?bitstr(U2, B2), _Opaques) when U2 > U1 ->
   inf_bitstr(U2, B2, U1, B1);
-t_inf(?bitstr(U1, B1), ?bitstr(U2, B2), _Opaques) ->
+t_inf_aux(?bitstr(U1, B1), ?bitstr(U2, B2), _Opaques) ->
   inf_bitstr(U1, B1, U2, B2);
-t_inf(?function(Domain1, Range1), ?function(Domain2, Range2), Opaques) ->
-  case t_inf(Domain1, Domain2, Opaques) of
+t_inf_aux(?function(Domain1, Range1), ?function(Domain2, Range2), Opaques) ->
+  case t_inf_aux(Domain1, Domain2, Opaques) of
     ?none -> ?none;
-    Domain -> ?function(Domain, t_inf(Range1, Range2, Opaques))
+    Domain -> ?function(Domain, t_inf_aux(Range1, Range2, Opaques))
   end;
-t_inf(?identifier(Set1), ?identifier(Set2), _Opaques) ->
+t_inf_aux(?identifier(Set1), ?identifier(Set2), _Opaques) ->
   case set_intersection(Set1, Set2) of
     ?none -> ?none;
     Set -> ?identifier(Set)
   end;
-t_inf(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, _Opaques) ->
+t_inf_aux(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, Opaques) ->
   %% Because it simplifies the anonymous function, we allow Pairs to temporarily
   %% contain mandatory pairs with none values, since all such cases should
   %% result in a none result.
@@ -2812,27 +2799,103 @@ t_inf(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, _Opaques) ->
     map_pairwise_merge(
       %% For optional keys in both maps, when the infimum is none, we have
       %% essentially concluded that K must not be a key in the map.
-      fun(K, ?opt, V1, ?opt, V2) -> {K, ?opt, t_inf(V1, V2)};
+      fun(K, ?opt, V1, ?opt, V2) -> {K, ?opt, t_inf_aux(V1, V2, Opaques)};
 	 %% When a key is optional in one map, but mandatory in another, it
 	 %% becomes mandatory in the infinumum
-	 (K, _, V1, _, V2) -> {K, ?mand, t_inf(V1, V2)}
+	 (K, _, V1, _, V2) -> {K, ?mand, t_inf_aux(V1, V2, Opaques)}
       end, A, B),
-  t_map(Pairs, t_inf(ADefK, BDefK), t_inf(ADefV, BDefV));
-t_inf(?nil, ?nil, _Opaques) -> ?nil;
-t_inf(?nil, ?nonempty_list(_, _), _Opaques) ->
+  t_map(Pairs, t_inf_aux(ADefK, BDefK, Opaques), t_inf_aux(ADefV, BDefV, Opaques));
+%% Intersection of 1 or more nominal types
+t_inf_aux(?nominal_set(LHS_Ns, LHS_S),?nominal_set(RHS_Ns, RHS_S), Opaques) ->
+  inf_nominal_sets(LHS_Ns, RHS_Ns, t_inf_aux(LHS_S, RHS_S, Opaques), Opaques);
+t_inf_aux(?nominal_set(LHS_Ns, LHS_S), ?nominal(_, _)=RHS, Opaques) ->
+   case inf_nominal_sets(LHS_Ns, [RHS], ?none, Opaques) of % this handles the case where LHS_Ns contains a supertype of RHS. 
+    ?nominal_set(_, ?none) = S -> % this case is for when RHS is a supertype of many nominal types
+      t_sup(S, t_inf_aux(LHS_S, RHS, Opaques)); 
+    ?nominal(N, S) -> 
+       %io:format("nominal_structure1~p~n", [S]),
+       %io:format("nominal_structure2~p~n", [t_sup_aux(S, LHS_S)]),
+       %io:format("RHS~p~n", [RHS]),
+       %io:format("Inf~p~n", [[?nominal(N, S), t_inf_aux(RHS, LHS_S, Opaques)]]),
+      t_sup_aux(?nominal(N, S), t_inf_aux(RHS, LHS_S, Opaques)); % because t_sup is used within normalization, we can prove that there's no overlap btw S and LHS_S
+    ?none -> 
+      %io:format("LHS~p~n", [[LHS_Ns, LHS_S, RHS]]),
+     t_inf_aux(RHS, LHS_S, Opaques)
+   end;
+t_inf_aux(?nominal(_, _)=LHS, ?nominal_set(_, _)=RHS, Opaques) ->
+  t_inf_aux(RHS, LHS, Opaques);
+t_inf_aux(?nominal_set(LHS_Ns, LHS_S), RHS, Opaques) ->
+  Ns = [t_inf_aux(T, RHS, Opaques) || T <- LHS_Ns],
+  normalize_nominal_set(Ns, t_inf_aux(LHS_S, RHS, Opaques), []);
+t_inf_aux(LHS, ?nominal_set(_, _)=RHS, Opaques) ->
+  t_inf_aux(RHS, LHS, Opaques);
+t_inf_aux(?nominal(Same, LHS_S), ?nominal(Same, RHS_S), Opaques) ->
+  Inf = t_inf_aux(LHS_S, RHS_S, Opaques),
+  case t_is_none_or_unit(Inf) of
+    true -> 
+      %io:format("t_inf for same name~p~n", [[LHS_S, RHS_S, Inf]]),
+      ?none;
+    false -> 
+      ?nominal(Same, Inf)
+  end;          
+t_inf_aux(?nominal(LHS_Name, ?nominal(L_N, _)=L_I),
+      ?nominal(RHS_Name, ?nominal(R_N, _)=R_I), Opaques) ->
+  Inf = t_inf_aux(L_I, R_I, Opaques),
+  case t_is_none_or_unit(Inf) of
+    true ->
+      %io:format("t_inf for 2 different nested~p~n", [[L_I, R_I, Inf]]),
+      ?none;
+    false ->
+      %% Inf must be one of L_N or R_N since a nominal is by definition more
+      %% specific than its structure. If these are the same as either of the
+      %% outer names, normalize the result by removing one level of nesting.
+      case Inf of
+        ?nominal(LHS_Name, _) -> Inf;
+        ?nominal(RHS_Name, _) -> Inf;
+        ?nominal(L_N, _) -> 
+          ?nominal(LHS_Name, Inf);
+        ?nominal(R_N, _) -> 
+          ?nominal(RHS_Name, Inf);
+        _ -> 
+          %io:format("t_inf for same name inner~p~n", [[L_I, R_I, Inf]]),
+          ?none
+      end
+  end;
+t_inf_aux(?nominal(LHS_Name, ?nominal(_, _)=Inner),
+      ?nominal(_, _)=RHS, Opaques) ->
+  Inf = t_inf_aux(Inner, RHS, Opaques),
+  case t_is_none_or_unit(Inf) of
+    true -> ?none;
+    false -> ?nominal(LHS_Name, Inf)
+  end;
+t_inf_aux(LHS, ?nominal(_, ?nominal(_, _))=RHS, Opaques) ->
+  t_inf_aux(RHS, LHS, Opaques);
+t_inf_aux(?nominal(_, _), ?nominal(_, _), _Opaques) ->
   ?none;
-t_inf(?nonempty_list(_, _), ?nil, _Opaques) ->
+t_inf_aux(?nominal(LHS_Name, LHS_S), RHS_S, Opaques) ->
+  Inf = t_inf_aux(LHS_S, RHS_S, Opaques),
+  case t_is_none_or_unit(Inf) of
+    true -> 
+      ?none;
+    false -> ?nominal(LHS_Name, Inf)
+  end;
+t_inf_aux(LHS, ?nominal(_, _)=RHS, Opaques) ->
+  t_inf_aux(RHS, LHS, Opaques);
+t_inf_aux(?nil, ?nil, _Opaques) -> ?nil;
+t_inf_aux(?nil, ?nonempty_list(_, _), _Opaques) ->
   ?none;
-t_inf(?nil, ?list(_Contents, Termination, _), Opaques) ->
-  t_inf(?nil, t_unopaque(Termination), Opaques);
-t_inf(?list(_Contents, Termination, _), ?nil, Opaques) ->
-  t_inf(?nil, t_unopaque(Termination), Opaques);
-t_inf(?list(Contents1, Termination1, Size1),
+t_inf_aux(?nonempty_list(_, _), ?nil, _Opaques) ->
+  ?none;
+t_inf_aux(?nil, ?list(_Contents, Termination, _), Opaques) ->
+  t_inf_aux(?nil, t_unopaque(Termination), Opaques);
+t_inf_aux(?list(_Contents, Termination, _), ?nil, Opaques) ->
+  t_inf_aux(?nil, t_unopaque(Termination), Opaques);
+t_inf_aux(?list(Contents1, Termination1, Size1),
       ?list(Contents2, Termination2, Size2), Opaques) ->
-  case t_inf(Termination1, Termination2, Opaques) of
+  case t_inf_aux(Termination1, Termination2, Opaques) of
     ?none -> ?none;
     Termination ->
-      case t_inf(Contents1, Contents2, Opaques) of
+      case t_inf_aux(Contents1, Contents2, Opaques) of
 	?none ->
 	  %% If none of the lists are nonempty, then the infimum is nil.
 	  case (Size1 =:= ?unknown_qual) andalso (Size2 =:= ?unknown_qual) of
@@ -2850,7 +2913,7 @@ t_inf(?list(Contents1, Termination1, Size1),
 	  ?list(Contents, Termination, Size)
       end
   end;
-t_inf(?number(_, _) = T1, ?number(_, _) = T2, _Opaques) ->
+t_inf_aux(?number(_, _) = T1, ?number(_, _) = T2, _Opaques) ->
   case {T1, T2} of
     {T, T}                            -> T;
     {_, ?number(?any, ?unknown_qual)} -> T1;
@@ -2867,7 +2930,7 @@ t_inf(?number(_, _) = T1, ?number(_, _) = T2, _Opaques) ->
     {?int_range(From1, To1), ?int_range(From2, To2)} ->
       t_from_range(max(From1, From2), min(To1, To2));
     {Range = ?int_range(_, _), ?int_set(Set)} ->
-      %% io:format("t_inf range, set args ~p ~p ~n", [T1, T2]),
+      %% io:format("t_inf_aux range, set args ~p ~p ~n", [T1, T2]),
       Ans2 =
 	case set_filter(fun(X) -> in_range(X, Range) end, Set) of
 	  ?none -> ?none;
@@ -2881,50 +2944,50 @@ t_inf(?number(_, _) = T1, ?number(_, _) = T2, _Opaques) ->
 	NewSet -> ?int_set(NewSet)
       end
   end;
-t_inf(?product(Types1), ?product(Types2), Opaques) ->
+t_inf_aux(?product(Types1), ?product(Types2), Opaques) ->
   L1 = length(Types1),
   L2 = length(Types2),
   if L1 =:= L2 -> ?product(t_inf_lists(Types1, Types2, Opaques));
      true -> ?none
   end;
-t_inf(?product(_), _, _Opaques) ->
+t_inf_aux(?product(_), _, _Opaques) ->
   ?none;
-t_inf(_, ?product(_), _Opaques) ->
+t_inf_aux(_, ?product(_), _Opaques) ->
   ?none;
-t_inf(?tuple(?any, ?any, ?any), ?tuple(_, _, _) = T, _Opaques) ->
+t_inf_aux(?tuple(?any, ?any, ?any), ?tuple(_, _, _) = T, _Opaques) ->
   do_not_subst_all_vars_to_any(T);
-t_inf(?tuple(_, _, _) = T, ?tuple(?any, ?any, ?any), _Opaques) ->
+t_inf_aux(?tuple(_, _, _) = T, ?tuple(?any, ?any, ?any), _Opaques) ->
   do_not_subst_all_vars_to_any(T);
-t_inf(?tuple(?any, ?any, ?any), ?tuple_set(_) = T, _Opaques) ->
+t_inf_aux(?tuple(?any, ?any, ?any), ?tuple_set(_) = T, _Opaques) ->
   do_not_subst_all_vars_to_any(T);
-t_inf(?tuple_set(_) = T, ?tuple(?any, ?any, ?any), _Opaques) ->
+t_inf_aux(?tuple_set(_) = T, ?tuple(?any, ?any, ?any), _Opaques) ->
   do_not_subst_all_vars_to_any(T);
-t_inf(?tuple(Elements1, Arity, _Tag1), ?tuple(Elements2, Arity, _Tag2), Opaques) ->
+t_inf_aux(?tuple(Elements1, Arity, _Tag1), ?tuple(Elements2, Arity, _Tag2), Opaques) ->
   case t_inf_lists_strict(Elements1, Elements2, Opaques) of
     bottom -> ?none;
     NewElements -> t_tuple(NewElements)
   end;
-t_inf(?tuple_set(List1), ?tuple_set(List2), Opaques) ->
+t_inf_aux(?tuple_set(List1), ?tuple_set(List2), Opaques) ->
   inf_tuple_sets(List1, List2, Opaques);
-t_inf(?tuple_set(List), ?tuple(_, Arity, _) = T, Opaques) ->
+t_inf_aux(?tuple_set(List), ?tuple(_, Arity, _) = T, Opaques) ->
   inf_tuple_sets(List, [{Arity, [T]}], Opaques);
-t_inf(?tuple(_, Arity, _) = T, ?tuple_set(List), Opaques) ->
+t_inf_aux(?tuple(_, Arity, _) = T, ?tuple_set(List), Opaques) ->
   inf_tuple_sets(List, [{Arity, [T]}], Opaques);
 %% be careful: here and in the next clause T can be ?opaque
-t_inf(?union(U1), T, Opaques) ->
+t_inf_aux(?union(U1), T, Opaques) ->
   ?union(U2) = force_union(T),
   inf_union(U1, U2, Opaques);
-t_inf(T, ?union(U2), Opaques) ->
+t_inf_aux(T, ?union(U2), Opaques) ->
   ?union(U1) = force_union(T),
   inf_union(U1, U2, Opaques);
-t_inf(?opaque(Set1), ?opaque(Set2), Opaques) ->
+t_inf_aux(?opaque(Set1), ?opaque(Set2), Opaques) ->
   inf_opaque(Set1, Set2, Opaques);
-t_inf(?opaque(_) = T1, T2, Opaques) ->
+t_inf_aux(?opaque(_) = T1, T2, Opaques) ->
   inf_opaque1(T2, T1, 1, Opaques);
-t_inf(T1, ?opaque(_) = T2, Opaques) ->
+t_inf_aux(T1, ?opaque(_) = T2, Opaques) ->
   inf_opaque1(T1, T2, 2, Opaques);
 %% and as a result, the cases for ?opaque should appear *after* ?union
-t_inf(#c{}, #c{}, _) ->
+t_inf_aux(#c{}, #c{}, _) ->
   ?none.
 
 inf_opaque1(T1, ?opaque(Set2)=T2, Pos, Opaques) ->
@@ -3056,6 +3119,32 @@ t_inf_lists_strict([T1|Left1], [T2|Left2], Acc, Opaques) ->
   end;
 t_inf_lists_strict([], [], Acc, _Opaques) ->
   lists:reverse(Acc).
+
+inf_nominal_sets(Left, Right, Other, Opaques) ->
+  normalize_nominal_set(inf_nominal_sets_1(Left, Right, Opaques), Other, []).
+
+inf_nominal_sets_1([?nominal(Same, _) = LHS | Left],
+                   [?nominal(Same, _) = RHS | Right],
+                   Opaques) ->
+  case t_inf_aux(LHS, RHS, Opaques) of
+    ?nominal(_, _) = Inf -> [Inf | inf_nominal_sets_1(Left, Right, Opaques)];
+    ?none -> 
+      inf_nominal_sets_1(Left, Right, Opaques)
+  end;
+inf_nominal_sets_1([?nominal(LHS_Name, _) = LHS | Left] = Left0,
+                   [?nominal(RHS_Name, _) = RHS | Right] = Right0,
+                   Opaques) ->
+  case t_inf_aux(LHS, RHS, Opaques) of 
+    ?nominal(_, _) = Inf -> [Inf | inf_nominal_sets_1(Left, Right, Opaques)];
+    ?none -> 
+      %io:format("LHS at inf_nominal_sets_1~p~n", [[LHS, RHS]]),
+      case LHS_Name < RHS_Name of
+        true -> inf_nominal_sets_1(Left, Right0, Opaques);
+        false -> inf_nominal_sets_1(Left0, Right, Opaques)
+      end
+  end;
+inf_nominal_sets_1(_Left, _Right, _Opaques) ->
+  [].
 
 inf_tuple_sets(L1, L2, Opaques) ->
   case inf_tuple_sets(L1, L2, [], Opaques) of
@@ -3229,6 +3318,14 @@ t_subst_aux(?list(Contents, Termination, Size), Map) ->
   end;
 t_subst_aux(?function(Domain, Range), Map) ->
   ?function(t_subst_aux(Domain, Map), t_subst_aux(Range, Map));
+% t_subst_aux(?nominal({gb_sets,_,_,_},S), Map) ->
+%   error(t_subst_aux(S, Map));
+t_subst_aux(?nominal(N,S), Map) ->
+  ?nominal(N, t_subst_aux(S, Map));
+t_subst_aux(?nominal_set(N, S), Map) ->
+  normalize_nominal_set([t_subst_aux(X, Map) || X <- N],
+                         t_subst_aux(S, Map),
+                         []);
 t_subst_aux(?product(Types), Map) ->
   ?product([t_subst_aux(T, Map) || T <- Types]);
 t_subst_aux(?tuple(?any, ?any, ?any) = T, _Map) ->
@@ -3292,6 +3389,33 @@ t_unify_table_only(Type, ?var(Id), VarMap) ->
 t_unify_table_only(?function(Domain1, Range1), ?function(Domain2, Range2), VarMap) ->
   VarMap1 = t_unify_table_only(Domain1, Domain2, VarMap),
   t_unify_table_only(Range1, Range2, VarMap1);
+t_unify_table_only(?nominal_set([H1|T1], Str1), ?nominal_set([H2|T2], Str2), VarMap) ->
+  VarMap1 = t_unify_table_only(H1, H2, VarMap),
+  t_unify_table_only(?nominal_set(T1, Str1), ?nominal_set(T2, Str2), VarMap1);
+t_unify_table_only(?nominal_set([H1], S1), ?nominal_set([H2], S2), VarMap) ->
+  VarMap1 = t_unify_table_only(H1, H2, VarMap),
+  t_unify_table_only(S1, S2, VarMap1);
+t_unify_table_only(?nominal_set(_, _) = T1, ?nominal(_,_) = T2, VarMap) -> 
+  t_unify_table_only(T1, ?nominal_set(T2, ?none), VarMap);
+t_unify_table_only(?nominal(_,_) = T1, ?nominal_set(_,_) = T2, VarMap) ->
+  t_unify_table_only(T2, T1, VarMap);
+t_unify_table_only(?nominal(N1, S1)=T1, ?nominal(N2, S2)=T2, VarMap) ->
+  case N1 =:= N2 of
+    true -> t_unify_table_only(S1, S2, VarMap);
+    false -> throw({mismatch, T1, T2})
+  end;
+t_unify_table_only(?nominal(_, S1), T2, VarMap) ->
+  t_unify_table_only(S1, T2, VarMap);
+t_unify_table_only(T1, ?nominal(_, _)=T2, VarMap) ->
+  t_unify_table_only(T2, T1, VarMap);
+t_unify_table_only(?nominal_set([H], S1), T2, VarMap) ->
+  VarMap1 = t_unify_table_only(H, T2, VarMap),
+  t_unify_table_only(S1, T2, VarMap1);
+t_unify_table_only(?nominal_set([H|T], S1), T2, VarMap) ->
+  VarMap1 = t_unify_table_only(H, T2, VarMap),
+  t_unify_table_only(?nominal_set(T, S1), T2, VarMap1);
+t_unify_table_only(T1, ?nominal_set(_,_) = T2, VarMap) ->
+  t_unify_table_only(T2, T1, VarMap);
 t_unify_table_only(?list(Contents1, Termination1, Size),
 	?list(Contents2, Termination2, Size), VarMap) ->
   VarMap1 = t_unify_table_only(Contents1, Contents2, VarMap),
@@ -3507,6 +3631,25 @@ t_subtract(?float, ?number(_Set, Tag)) ->
     ?unknown_qual -> ?none;
     _ -> ?float
   end;
+t_subtract(?nominal_set(N1, S1), ?nominal_set(N2, S2)) -> 
+  subtract_nominal_sets(N1, S1, N2, S2, []);
+t_subtract(?nominal_set(N, S), ?nominal(_, _) = T2) ->
+  subtract_nominal_sets(N, S, [T2], ?none, []);
+t_subtract(?nominal(_,_) = N1, ?nominal_set(N2,S2)) -> 
+  subtract_nominal_sets([N1], ?none, N2, S2, []);
+t_subtract(?nominal_set(N, S1), S2) ->
+  subtract_nominal_sets(N, S1, [], S2, []);
+t_subtract(S1, ?nominal_set(_, S2)) -> t_subtract(S1, S2);
+t_subtract(?nominal(Name, S1), ?nominal(Name, S2)) ->
+  t_subtract(?nominal(Name, S1), S2);
+t_subtract(?nominal(_, _) = T, ?nominal(_, _)) -> T;
+t_subtract(?nominal(Name, S1), S2) ->
+  Sub = t_subtract(S1, S2),
+  case t_is_none_or_unit(Sub) of
+    true -> ?none;
+    false -> ?nominal(Name, Sub)
+  end;
+t_subtract(S1, ?nominal(_, _)) -> S1;
 t_subtract(?number(_, _), ?number(?any, ?unknown_qual)) -> ?none;
 t_subtract(?number(_, _) = T1, ?integer(?any)) -> t_inf(?float, T1);
 t_subtract(?int_set(Set1), ?int_set(Set2)) ->
@@ -3691,6 +3834,34 @@ subtract_union([], [], Type, Acc) ->
       Type
   end.
 
+subtract_nominal_sets([], Str1, _, Str2, []) -> t_subtract(Str1, Str2);
+subtract_nominal_sets([], Str1, _, Str2, Acc) -> 
+  normalize_nominal_set(Acc, t_subtract(Str1, Str2), []);
+subtract_nominal_sets([?nominal(Name, S1)|Ts1], Str1, [], Str2, Acc) -> 
+  Sub = t_subtract(S1, Str2),
+  case t_is_none_or_unit(Sub) of
+    true -> subtract_nominal_sets(Ts1, Str1, [], Str2, Acc);
+    false -> subtract_nominal_sets(Ts1, Str1, [], Str2, [?nominal(Name, Sub)|Acc])
+  end;
+subtract_nominal_sets([?nominal(Name, S1)|Ts1], Str1, [?nominal(Name, S2)|Ts2], Str2, Acc) ->
+  Sub1 = t_subtract(S1, S2),
+  Sub2 = t_subtract(S1, Str2),
+  case t_is_none_or_unit(Sub1) and t_is_none_or_unit(Sub2) of
+    true -> subtract_nominal_sets(Ts1, Str1, Ts2, Str2, Acc);
+    false -> subtract_nominal_sets(Ts1, Str1, Ts2, Str2, [?nominal(Name, t_sup(Sub1, Sub2))|Acc])
+  end;
+subtract_nominal_sets([?nominal(Name1, S1)|Ts1] = L1, Str1, [?nominal(Name2, _)|Ts2] = L2, Str2, Acc) ->
+  Sub = t_subtract(S1, Str2),
+  if Name1 < Name2 ->
+      case t_is_none_or_unit(Sub) of
+        true -> subtract_nominal_sets(Ts1, Str1, L2, Str2, Acc);
+        false -> subtract_nominal_sets(Ts1, Str1, L2, Str2, [?nominal(Name1, Sub)|Acc])
+      end;
+    Name1 > Name2 ->
+      subtract_nominal_sets(L1, Str1, Ts2, Str2, Acc)
+  end.
+
+
 %% Helper for tuple and product subtraction. The second list
 %% should contain a single element that is not none. That element
 %% will replace the element in the corresponding position in the
@@ -3735,7 +3906,7 @@ t_is_equal(_, _) -> false.
 -spec t_is_subtype(erl_type(), erl_type()) -> boolean().
 
 t_is_subtype(T1, T2) ->
-  Inf = t_inf(T1, T2),
+  Inf = t_inf_aux(T1, T2, 'universe'),
   subtype_is_equal(T1, Inf).
 
 %% The subtype relation has to behave correctly irrespective of opaque
@@ -3774,6 +3945,12 @@ t_unopaque(?opaque(_) = T, Opaques) ->
     true -> t_unopaque(t_opaque_structure(T), Opaques);
     false -> T
   end;
+t_unopaque(?nominal(_, S), Opaques) ->
+  t_unopaque(S, Opaques);
+t_unopaque(?nominal_set([], S), Opaques) ->
+  t_unopaque(S, Opaques);
+t_unopaque(?nominal_set([?nominal(_, S1)|T], S), Opaques) ->
+  t_unopaque(?nominal_set(T, t_sup(S, S1)), Opaques);
 t_unopaque(?list(ElemT, Termination, Sz), Opaques) ->
   ?list(t_unopaque(ElemT, Opaques), t_unopaque(Termination, Opaques), Sz);
 t_unopaque(?tuple(?any, _, _) = T, _) -> T;
@@ -3817,7 +3994,14 @@ t_unopaque(T, _) ->
 t_limit(Term, K) when is_integer(K) ->
   case is_limited(Term, K) of
     true -> Term;
-    false -> t_limit_k(Term, K)
+    false -> 
+      Res = t_limit_k(Term, K),
+      case t_is_subtype(subst_all_vars_to_any(Term), subst_all_vars_to_any(Res)) of 
+        true -> Res;
+        false -> error({subst_all_vars_to_any(Term), subst_all_vars_to_any(Res)})
+      end
+      %true = t_is_subtype(Term, Res),
+      %Res
   end.
 
 is_limited(?any, _) -> true;
@@ -3843,6 +4027,10 @@ is_limited(?product(Elements), K) ->
   are_all_limited(Elements, K - 1);
 is_limited(?union(Elements), K) ->
   are_all_limited(Elements, K);
+is_limited(?nominal_set(Elements, S), K) ->
+  is_limited(S, K - 1) andalso are_all_limited(Elements, K - 1);
+is_limited(?nominal(_, S), K) ->
+  is_limited(S, K - 1);
 is_limited(?opaque(Es), K) ->
   lists:all(fun(#opaque{struct = S}) -> is_limited(S, K) end, Es);
 is_limited(?map(Pairs, DefK, DefV), K) ->
@@ -3892,6 +4080,23 @@ t_limit_k(?opaque(Es), K) ->
             Opaque#opaque{struct = NewS}
           end || #opaque{struct = S} = Opaque <- Es],
   ?opaque(ordsets:from_list(List));
+t_limit_k(?nominal(N, ?nominal(_, _)=S0), K) ->
+  case t_limit_k(S0, K - 1) of
+      ?nominal(_, _)=S -> ?nominal(N, S);
+      _ -> ?any 
+  end;
+t_limit_k(?nominal(N, ?nominal_set(_, _)=S0), K) ->
+  case t_limit_k(S0, K - 1) of
+      ?nominal_set(_, _)=S -> ?nominal(N, S);
+      ?nominal(_, _)=S -> ?nominal(N, S);
+      _ -> ?any 
+  end;
+t_limit_k(?nominal(N, S), K) ->
+  ?nominal(N, t_limit_k(S, K - 1));
+t_limit_k(?nominal_set(Elements, S), K) ->
+  normalize_nominal_set([t_limit_k(X, K) || X <- Elements],
+                         t_limit_k(S, K),
+                         []);
 t_limit_k(?map(Pairs0, DefK0, DefV0), K) ->
   Fun = fun({EK, MNess, EV}, {Exact, DefK1, DefV1}) ->
 	    LV = t_limit_k(EV, K - 1),
@@ -3930,6 +4135,23 @@ t_abstract_records(?function(Domain, Range), RecDict) ->
 	    t_abstract_records(Range, RecDict));
 t_abstract_records(?product(Types), RecDict) ->
   ?product([t_abstract_records(T, RecDict) || T <- Types]);
+t_abstract_records(?nominal(N, ?nominal(_, _)=S0), RecDict) ->
+  case t_abstract_records(S0, RecDict) of
+      ?nominal(_, _)=S -> ?nominal(N, S);
+      _ -> ?any 
+  end;
+t_abstract_records(?nominal(N, ?nominal_set(_, _)=S0), RecDict) ->
+  case t_abstract_records(S0, RecDict) of
+      ?nominal_set(_, _)=S -> ?nominal(N, S);
+      ?nominal(_, _)=S -> ?nominal(N, S);
+      _ -> ?any 
+  end;
+t_abstract_records(?nominal(N, S), RecDict) ->
+  ?nominal(N, t_abstract_records(S, RecDict));
+t_abstract_records(?nominal_set(Elements, S), RecDict) ->
+  normalize_nominal_set([t_abstract_records(X, RecDict) || X <- Elements],
+                         t_abstract_records(S, RecDict),
+                         []);
 t_abstract_records(?union(Types), RecDict) ->
   t_sup([t_abstract_records(T, RecDict) || T <- Types]);
 t_abstract_records(?tuple(?any, ?any, ?any) = T, _RecDict) ->
@@ -4085,6 +4307,11 @@ t_to_string(?int_range(From, To), _RecDict) ->
   flat_format("~w..~w", [From, To]);
 t_to_string(?integer(?any), _RecDict) -> "integer()";
 t_to_string(?float, _RecDict) -> "float()";
+t_to_string(?nominal(Name, Structure), RecDict) ->
+  StructureString = t_to_string(Structure, RecDict),
+  flat_format("nominal(~w, ~ts)", [Name, StructureString]);
+t_to_string(?nominal_set(T,S), RecDict) ->
+  union_sequence([N || N <- [S|T], N =/= ?none], RecDict);
 t_to_string(?number(?any, ?unknown_qual), _RecDict) -> "number()";
 t_to_string(?product(List), RecDict) ->
   "<" ++ comma_sequence(List, RecDict) ++ ">";
@@ -4537,13 +4764,7 @@ from_form({type, _Anno, union, Args}, S, D, L, C) ->
   {Lst, L1, C1} = list_from_form(Args, S, D, L, C),
   {t_sup(Lst), L1, C1};
 from_form({user_type, _Anno, Name, Args}, S, D, L, C) ->
-  type_from_form(Name, Args, S, D, L, C);
-from_form({type, _Anno, Name, Args}, S, D, L, C) ->
-  %% Compatibility: modules compiled before Erlang/OTP 18.0.
-  type_from_form(Name, Args, S, D, L, C);
-from_form({opaque, _Anno, Name, {Mod, Args, Rep}}, _S, _D, L, C) ->
-  %% XXX. To be removed.
-  {t_opaque(Mod, Name, Args, Rep), L, C}.
+  type_from_form(Name, Args, S, D, L, C).
 
 builtin_type(Name, Type, S, D, L, C) ->
   #from_form{site = Site, mrecs = MR} = S,
@@ -4567,7 +4788,7 @@ type_from_form(Name, Args, S, D, L, C) ->
   TypeName = {type, {Module, Name, ArgsLen}},
   case can_unfold_more(TypeName, TypeNames) of
     true ->
-      {R, C1} = lookup_module_types(Module, MR, C),
+      {R, C1} = case lookup_module_types(Module, MR, C) of error -> error({Name, Args}); KK -> KK end,
       type_from_form1(Name, Args, ArgsLen, R, TypeName, TypeNames, Site,
                       S, D, L, C1);
     false ->
@@ -4580,7 +4801,7 @@ type_from_form1(Name, Args, ArgsLen, R, TypeName, TypeNames, Site,
     {_, {_, _}} when element(1, Site) =:= check ->
       {_ArgTypes, L1, C1} = list_from_form(Args, S, D, L, C),
       {t_any(), L1, C1};
-    {Tag, {{Module, {File,_Location}, Form, ArgNames}, Type}} ->
+    {Tag, {{Module, {File,_Location}, Form, ArgNames}, _Type}} ->
       NewTypeNames = [TypeName|TypeNames],
       S1 = S#from_form{tnames = NewTypeNames},
       {ArgTypes, L1, C1} = list_from_form(Args, S1, D, L, C),
@@ -4599,16 +4820,11 @@ type_from_form1(Name, Args, ArgsLen, R, TypeName, TypeNames, Site,
             case Tag of
               type ->
                 recur_limit(Fun, D, L1, TypeName, TypeNames);
-              opaque ->
+              nominal ->
                 {Rep, L2, C2} = recur_limit(Fun, D, L1, TypeName, TypeNames),
-                Rep1 = choose_opaque_type(Rep, Type),
-                Rep2 = case cannot_have_opaque(Rep1, TypeName, TypeNames) of
-                         true -> Rep;
-                         false ->
-                           ArgTypes2 = subst_all_vars_to_any_list(ArgTypes),
-                           t_opaque(Module, Name, ArgTypes2, Rep1)
-                       end,
-                {Rep2, L2, C2}
+                {t_nominal({Module, Name, ArgsLen, transparent}, Rep), L2, C2};
+              opaque ->
+                recur_limit(Fun, D, L1, TypeName, TypeNames)
             end,
           C4 = cache_put(CKey, NewType, L1 - L3, C3),
           {NewType, L3, C4}
@@ -4658,7 +4874,7 @@ remote_from_form1(RemMod, Name, Args, ArgsLen, RemDict, RemType, TypeNames,
     {_, {_, _}} when element(1, Site) =:= check ->
       {_ArgTypes, L1, C1} = list_from_form(Args, S, D, L, C),
       {t_any(), L1, C1};
-    {Tag, {{Mod, {File,_Location}, Form, ArgNames}, Type}} ->
+    {Tag, {{Mod, {File,_Location}, Form, ArgNames}, _Type}} ->
       NewTypeNames = [RemType|TypeNames],
       S1 = S#from_form{tnames = NewTypeNames},
       {ArgTypes, L1, C1} = list_from_form(Args, S1, D, L, C),
@@ -4678,16 +4894,10 @@ remote_from_form1(RemMod, Name, Args, ArgsLen, RemDict, RemType, TypeNames,
               type ->
                 recur_limit(Fun, D, L1, RemType, TypeNames);
               opaque ->
+                recur_limit(Fun, D, L1, RemType, TypeNames);
+              nominal ->
                 {NewRep, L2, C2} = recur_limit(Fun, D, L1, RemType, TypeNames),
-                NewRep1 = choose_opaque_type(NewRep, Type),
-                NewRep2 =
-                  case cannot_have_opaque(NewRep1, RemType, TypeNames) of
-                    true -> NewRep;
-                    false ->
-                      ArgTypes2 = subst_all_vars_to_any_list(ArgTypes),
-                      t_opaque(Mod, Name, ArgTypes2, NewRep1)
-                  end,
-                {NewRep2, L2, C2}
+                {t_nominal({Mod, Name, ArgsLen, transparent}, NewRep), L2, C2}
             end,
           C4 = cache_put(CKey, NewType, L1 - L3, C3),
           {NewType, L3, C4}
@@ -4698,27 +4908,7 @@ remote_from_form1(RemMod, Name, Args, ArgsLen, RemDict, RemType, TypeNames,
       throw({error, Msg})
   end.
 
-subst_all_vars_to_any_list(Types) ->
-  [subst_all_vars_to_any(Type) || Type <- Types].
 
-%% Opaque types (both local and remote) are problematic when it comes
-%% to the limits (TypeNames, D, and L). The reason is that if any() is
-%% substituted for a more specialized subtype of an opaque type, the
-%% property stated along with decorate_with_opaque() (the type has to
-%% be a subtype of the declared type) no longer holds.
-%%
-%% The less than perfect remedy: if the opaque type created from a
-%% form is not a subset of the declared type, the declared type is
-%% used instead, effectively bypassing the limits, and potentially
-%% resulting in huge types.
-choose_opaque_type(Type, DeclType) ->
-  case
-    t_is_subtype(subst_all_vars_to_any(Type),
-                 subst_all_vars_to_any(DeclType))
-  of
-    true -> Type;
-    false -> DeclType
-  end.
 
 record_from_form({atom, _, Name}, ModFields, S, D0, L0, C) ->
   #from_form{site = Site, mrecs = MR, tnames = TypeNames} = S,
@@ -5239,25 +5429,25 @@ lookup_record(Tag, Arity, Table) when is_atom(Tag) ->
       error
   end.
 
--spec lookup_type(_, _, _) -> {'type' | 'opaque', type_value()} | 'error'.
+-spec lookup_type(_, _, _) -> {'type' | 'opaque' | 'nominal', type_value()} | 'error'.
 lookup_type(Name, Arity, Table) ->
   case Table of
     #{{type, Name, Arity} := Found} ->
       {type, Found};
     #{{opaque, Name, Arity} := Found} ->
       {opaque, Found};
+    #{{nominal, Name, Arity} := Found} ->
+      {nominal, Found};
     #{} ->
       error
   end.
 
--spec type_is_defined('type' | 'opaque', atom(), arity(), type_table()) ->
+-spec type_is_defined('type' | 'opaque' | 'nominal', atom(), arity(), type_table()) ->
         boolean().
 
 type_is_defined(TypeOrOpaque, Name, Arity, Table) ->
   maps:is_key({TypeOrOpaque, Name, Arity}, Table).
 
-cannot_have_opaque(Type, TypeName, TypeNames) ->
-  t_is_none(Type) orelse is_recursive(TypeName, TypeNames).
 
 is_recursive(TypeName, TypeNames) ->
   lists:member(TypeName, TypeNames).
@@ -5275,6 +5465,12 @@ do_opaque(?opaque(_) = Type, Opaques, Pred) ->
     true -> do_opaque(t_opaque_structure(Type), Opaques, Pred);
     false -> Pred(Type)
   end;
+do_opaque(?nominal_set([], S), Opaques, Pred) ->
+  do_opaque(S, Opaques, Pred);
+do_opaque(?nominal_set([?nominal(_, S1)|T], Str), Opaques, Pred) ->
+  do_opaque(?nominal_set(T, t_sup(Str, S1)), Opaques, Pred);
+do_opaque(?nominal(_, S), Opaques, Pred) ->
+  do_opaque(S, Opaques, Pred);
 do_opaque(?union(List) = Type, Opaques, Pred) ->
   ?untagged_union(A,B,F,I,L,N,T,O,Map) = List,
   if O =:= ?none -> Pred(Type);
@@ -5477,6 +5673,9 @@ module_type_deps_of_type_defs(TypeTable) ->
   | {record_key(), record_value()}) -> [module()].
 
 module_type_deps_of_entry({{'type', _TypeName, _A}, {{_FromM, _FileLine, AbstractType, _ArgNames}, _}}) ->
+  type_form_to_remote_modules(AbstractType);
+
+module_type_deps_of_entry({{'nominal', _TypeName, _A}, {{_FromM, _FileLine, AbstractType, _ArgNames}, _}}) ->
   type_form_to_remote_modules(AbstractType);
 
 module_type_deps_of_entry({{'opaque', _TypeName, _A}, {{_FromM, _FileLine, AbstractType, _ArgNames}, _}}) ->
