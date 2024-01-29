@@ -2570,13 +2570,31 @@ t_sup(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
   t_map(Pairs, t_sup(ADefK, BDefK), t_sup(ADefV, BDefV));
 %% Union of 1 or more nominal types
 t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
-    ?nominal(Name, t_sup(S1, S2));
-t_sup(?nominal(_,S1), ?nominal(_,S2)) ->
-    t_sup(S1, S2);
-t_sup(?nominal(_,S1), S2) ->
-    t_sup(S1, S2);
-t_sup(S1, ?nominal(_,S2)) ->
-    t_sup(S1, S2);
+  ?nominal(Name, t_sup(S1, S2));
+%append both nominal types to the corresponding entries
+t_sup(?nominal(_,_)=T1, ?nominal(_,_)=T2) ->
+  sup_nominal_sets([T1],[T2],[]);
+  %?union(U1) = force_union(T1),
+  %?union(U2) = force_union(T2),
+  %sup_union(U1, U2);
+%TODO: if S1<:S2, t_sup(S1,S2), else append nominal to the corresponding entry, 
+%if t_inf(S1,S2) empty, append nominal to the corresponding entry, else t_sup(S1,S2) (we lose some precision here because we can't do set subtraction)
+t_sup(?nominal(_,S1)=T1, S2) ->
+  Inf = t_inf(S1, S2),
+  case t_is_none_or_unit(Inf) of
+    true -> 
+      ?union(U1) = force_union(T1),
+      sup_union(U1,S2);
+    false -> t_sup(S1, S2)
+  end;
+t_sup(S1, ?nominal(_,S2)=T2) ->
+  Inf = t_inf(S1, S2),
+  case t_is_none_or_unit(Inf) of
+    true -> 
+      ?union(U2) = force_union(T2),
+      sup_union(S1,U2);
+    false -> t_sup(S1, S2)
+  end;
 t_sup(T1, T2) ->
   ?union(U1) = force_union(T1),
   ?union(U2) = force_union(T2),
@@ -2609,6 +2627,15 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
   [t_sup(T1, T2)|t_sup_lists(Left1, Left2)];
 t_sup_lists([], []) ->
   [].
+
+sup_nominal_sets([{Name, S1}|Left1], [{Name, S2}|Left2], Acc) ->
+  NewAcc = [{Name, t_sup(S1, S2)}|Acc],
+  sup_tuple_sets(Left1, Left2, NewAcc);
+sup_nominal_sets([{_, _} = T1|Left1],
+	       L2, Acc) ->
+  sup_nominal_sets(Left1, L2, [T1|Acc]);
+sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
+sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_tuple_sets(L1, L2) ->
   TotalArities = ordsets:union([Arity || {Arity, _} <- L1],
@@ -2703,6 +2730,17 @@ force_union(T = ?opaque(_)) ->        ?opaque_union(T);
 force_union(T = ?map(_,_,_)) ->       ?map_union(T);
 force_union(T = ?tuple(_, _, _)) ->   ?tuple_union(T);
 force_union(T = ?tuple_set(_)) ->     ?tuple_union(T);
+force_union(T = ?nominal(_, ?atom(_))) ->          ?atom_union(T);
+force_union(T = ?nominal(_, ?bitstr(_, _))) ->     ?bitstr_union(T);
+force_union(T = ?nominal(_, ?function(_, _))) ->   ?function_union(T);
+force_union(T = ?nominal(_, ?identifier(_))) ->    ?identifier_union(T);
+force_union(T = ?nominal(_, ?list(_, _, _))) ->    ?list_union(T);
+force_union(T = ?nominal(_, ?nil)) ->              ?list_union(T);
+force_union(T = ?nominal(_, ?number(_, _))) ->     ?number_union(T);
+force_union(T = ?nominal(_, ?opaque(_))) ->        ?opaque_union(T);
+force_union(T = ?nominal(_, ?map(_,_,_))) ->       ?map_union(T);
+force_union(T = ?nominal(_, ?tuple(_, _, _))) ->   ?tuple_union(T);
+force_union(T = ?nominal(_, ?tuple_set(_))) ->     ?tuple_union(T);
 force_union(T = ?union(_)) ->         T.
 
 %%-----------------------------------------------------------------------------
