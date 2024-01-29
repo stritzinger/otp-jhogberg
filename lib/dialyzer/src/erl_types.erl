@@ -496,6 +496,8 @@ t_contains_opaque(?tuple_set(_Set) = T, Opaques) ->
   list_contains_opaque(t_tuple_subtypes(T), Opaques);
 t_contains_opaque(?union(List), Opaques) ->
   list_contains_opaque(List, Opaques);
+t_contains_opaque(?nominal(_, Structure), Opaques) ->
+  t_contains_opaque(Structure, Opaques);
 t_contains_opaque(?var(_Id), _Opaques) -> false.
 
 -spec list_contains_opaque([erl_type()], [erl_type()]) -> boolean().
@@ -2567,9 +2569,14 @@ t_sup(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
       end, A, B),
   t_map(Pairs, t_sup(ADefK, BDefK), t_sup(ADefV, BDefV));
 %% Union of 1 or more nominal types
-t_sup(?nominal(Name,S1), ?nominal(Name,S2)) -> ?nominal(Name,t_sup(S1, S2));
-t_sup(?nominal(_,S1), S2) -> t_sup(S1, S2);
-t_sup(S1, ?nominal(_,S2)) -> t_sup(S1, S2);
+t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
+    ?nominal(Name, t_sup(S1, S2));
+t_sup(?nominal(_,S1), ?nominal(_,S2)) ->
+    t_sup(S1, S2);
+t_sup(?nominal(_,S1), S2) ->
+    t_sup(S1, S2);
+t_sup(S1, ?nominal(_,S2)) ->
+    t_sup(S1, S2);
 t_sup(T1, T2) ->
   ?union(U1) = force_union(T1),
   ?union(U2) = force_union(T2),
@@ -2719,6 +2726,7 @@ t_elements(?function(_, _) = T, _Opaques) -> [T];
 t_elements(?identifier(?any) = T, _Opaques) -> [T];
 t_elements(?identifier(IDs), _Opaques) ->
   [?identifier([T]) || T <- IDs];
+t_elements(?nominal(_,_) = T, _Opaques) -> [T];
 t_elements(?list(_, _, _) = T, _Opaques) -> [T];
 t_elements(?number(_, _) = T, _Opaques) ->
   case T of
@@ -2834,10 +2842,18 @@ t_inf(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, _Opaques) ->
       end, A, B),
   t_map(Pairs, t_inf(ADefK, BDefK), t_inf(ADefV, BDefV));
 %% Intersection of 1 or more nominal types
-t_inf(?nominal(N, S1), ?nominal(N, S2), _) -> ?nominal(N, t_inf(S1,S2));
-t_inf(?nominal(_, _), ?nominal(_, _), _) -> t_none();
-t_inf(?nominal(_, S1), S2, _) -> t_inf(S1, S2);
-t_inf(S1, ?nominal(_, S2), _) -> t_inf(S1, S2);
+t_inf(?nominal(N, S1), ?nominal(N, S2), _) ->
+  ?nominal(N, t_inf(S1,S2));
+t_inf(?nominal(_, _), ?nominal(_, _), _) ->
+  t_none();
+t_inf(?nominal(Name, S1), S2, _) ->
+  Inf = t_inf(S1, S2),
+  case t_is_none_or_unit(Inf) of
+    true -> ?none;
+    false -> t_nominal(Name, Inf)
+  end;
+t_inf(A, ?nominal(_, _)=B, Opaques) ->
+  t_inf(B, A, Opaques);
 t_inf(?nil, ?nil, _Opaques) -> ?nil;
 t_inf(?nil, ?nonempty_list(_, _), _Opaques) ->
   ?none;
@@ -4105,6 +4121,9 @@ t_to_string(?int_range(From, To), _RecDict) ->
   flat_format("~w..~w", [From, To]);
 t_to_string(?integer(?any), _RecDict) -> "integer()";
 t_to_string(?float, _RecDict) -> "float()";
+t_to_string(?nominal(Name, Structure), RecDict) ->
+  StructureString = t_to_string(Structure, RecDict),
+  flat_format("nominal(~w, ~ts)", [Name, StructureString]);
 t_to_string(?number(?any, ?unknown_qual), _RecDict) -> "number()";
 t_to_string(?product(List), RecDict) ->
   "<" ++ comma_sequence(List, RecDict) ++ ">";
