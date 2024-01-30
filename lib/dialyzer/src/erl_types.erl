@@ -258,6 +258,7 @@
 -define(function_tag,   function).
 -define(identifier_tag, identifier).
 -define(nominal_tag,    nominal).
+-define(nominal_set_tag,nominal_set).
 -define(list_tag,       list).
 -define(map_tag,        map).
 -define(nil_tag,        nil).
@@ -270,7 +271,7 @@
 -define(var_tag,        var).
 
 -type tag()  :: ?atom_tag | ?binary_tag | ?function_tag | ?identifier_tag
-              | ?list_tag | ?map_tag | ?nil_tag | ?number_tag | ?nominal_tag
+              | ?list_tag | ?map_tag | ?nil_tag | ?number_tag | ?nominal_tag | ?nominal_set_tag
               | ?opaque_tag | ?product_tag
               | ?tuple_tag | ?tuple_set_tag | ?union_tag | ?var_tag.
 
@@ -322,6 +323,7 @@
 -define(int_range(From, To),       ?integer(#int_rng{from=From, to=To})).
 -define(int_set(Set),              ?integer(#int_set{set=Set})).
 -define(nominal(Name, Types),      #c{tag=?nominal_tag, elements={Name,Types}}).
+-define(nominal_set(Nominals),     #c{tag=?nominal_set_tag, elements=Nominals}).
 -define(list(Types, Term, Size),   #c{tag=?list_tag, elements={Types,Term},
 				      qualifier=Size}).
 -define(nil,                       #c{tag=?nil_tag}).
@@ -2587,6 +2589,17 @@ t_sup(?nominal(_,S1)=T1, S2) ->
   end;
 t_sup(S1, ?nominal(_,_)=T2) ->
   t_sup(T2,S1);
+t_sup(?nominal_set(_) = T1,?nominal_set(_) = T2) ->
+  ?union(U1) = force_union(T1),
+  ?union(U2) = force_union(T2),
+  sup_union(U1,U2);
+t_sup(?nominal_set(_) = T1,?nominal(_,_) = T2) -> 
+  ?union(U1) = force_union(T1),
+  ?union(U2) = force_union(T2),
+  sup_union(U1,U2);
+%TODO: Remove the nominals in T1 that overlap with S
+t_sup(?nominal_set(_),_) ->
+  t_none();
 t_sup(T1, T2) ->
   ?union(U1) = force_union(T1),
   ?union(U2) = force_union(T2),
@@ -2713,21 +2726,23 @@ force_union(T = ?opaque(_)) ->        ?opaque_union(T);
 force_union(T = ?map(_,_,_)) ->       ?map_union(T);
 force_union(T = ?tuple(_, _, _)) ->   ?tuple_union(T);
 force_union(T = ?tuple_set(_)) ->     ?tuple_union(T);
-
+force_union(T = ?nominal_set([H|T])) ->
+  U1 = force_union(H),
+  U2 = force_union(T),
+  sup_union(U1,U2);
 force_union(T = ?nominal(_, _)) -> 
-  ?union(U1) = ?atom_union(t_inf(T, t_atom())),
-  ?union(U2) = ?bitstr_union(t_inf(T, t_bitstr())),
-  ?union(U3) = ?function_union(t_inf(T, t_fun())),
-  ?union(U4) = ?identifier_union(t_inf(T, t_atom())),
-  ?union(List) = ?list_union(t_inf(T, t_list())),
-  ?union(Nil) = ?list_union(t_inf(T, t_nil())),
-  ?union(U5) = sup_union(List,Nil),
-  ?union(U6) = ?number_union(t_inf(T, t_number())),
-  ?union(U7) = ?opaque_union(t_contains_opaque(T)),
-  ?union(U8) = ?map_union(t_inf(T, t_map())),
-  ?union(U9) = ?tuple_union(t_inf(T, t_tuple())),
-  ?union([U1,U2,U3,U4,U5,U6,U7,U8,U9]);
-
+  AtomSlot = t_inf(T, t_atom()),
+  BitstrSlot = t_inf(T, t_bitstr()),
+  FunSlot = t_inf(T, t_fun()),
+  IdentifierSlot = t_inf(T, t_identifier()),
+  List = t_inf(T, t_list()),
+  Nil = t_inf(T, t_nil()),
+  ListSlot = sup_union(List,Nil),
+  NumberSlot = t_inf(T, t_number()),
+  OpaqueSlot = t_contains_opaque(T),
+  MapSlot = t_inf(T, t_map()),
+  TupleSlot = t_inf(T, t_tuple()),
+  ?union([AtomSlot,BitstrSlot,FunSlot,IdentifierSlot,ListSlot,NumberSlot,OpaqueSlot,MapSlot,TupleSlot]);
 force_union(T = ?union(_)) ->         T.
 
 %%-----------------------------------------------------------------------------
@@ -2752,6 +2767,7 @@ t_elements(?identifier(?any) = T, _Opaques) -> [T];
 t_elements(?identifier(IDs), _Opaques) ->
   [?identifier([T]) || T <- IDs];
 t_elements(?nominal(_,_) = T, _Opaques) -> [T];
+t_elements(?nominal_set(_) = T, _Opaques) -> [T];
 t_elements(?list(_, _, _) = T, _Opaques) -> [T];
 t_elements(?number(_, _) = T, _Opaques) ->
   case T of
@@ -2879,6 +2895,12 @@ t_inf(?nominal(Name, S1), S2, _) ->
   end;
 t_inf(A, ?nominal(_, _)=B, Opaques) ->
   t_inf(B, A, Opaques);
+t_inf(?nominal_set(_)=T1,?nominal_set(_)=T2,Opaques) ->
+  inf_nominal_sets(T1,T2,[],Opaques);
+t_inf(?nominal_set([?nominal(N,S1)|_]), ?nominal(N,S2),_)-> 
+  ?nominal(N, t_inf(S1,S2));
+t_inf(?nominal_set([_|T]), ?nominal(_,_) = N,_) -> 
+  t_inf(T,N);
 t_inf(?nil, ?nil, _Opaques) -> ?nil;
 t_inf(?nil, ?nonempty_list(_, _), _Opaques) ->
   ?none;
@@ -3117,6 +3139,14 @@ t_inf_lists_strict([T1|Left1], [T2|Left2], Acc, Opaques) ->
   end;
 t_inf_lists_strict([], [], Acc, _Opaques) ->
   lists:reverse(Acc).
+
+inf_nominal_sets([?nominal(Name1, S1)|Ts1] = L1, [?nominal(Name2, S2)|Ts2] = L2, Acc, Opaques) ->
+  if Name1 < Name2 -> inf_nominal_sets(Ts1, L2, Acc, Opaques);
+     Name1 > Name2 -> inf_nominal_sets(L1, Ts2, Acc, Opaques);
+     Name1 == Name2 -> inf_nominal_sets(Ts1,Ts2,[t_inf(?nominal(Name1,S1),?nominal(Name2,S2))|Acc], Opaques)
+  end;
+inf_nominal_sets([], _, Acc, _Opaques) -> lists:reverse(Acc);
+inf_nominal_sets(_, [], Acc, _Opaques) -> lists:reverse(Acc).
 
 inf_tuple_sets(L1, L2, Opaques) ->
   case inf_tuple_sets(L1, L2, [], Opaques) of
@@ -4149,6 +4179,9 @@ t_to_string(?float, _RecDict) -> "float()";
 t_to_string(?nominal(Name, Structure), RecDict) ->
   StructureString = t_to_string(Structure, RecDict),
   flat_format("nominal(~w, ~ts)", [Name, StructureString]);
+% TODO: Follow the format above
+t_to_string(?nominal_set(T), _RecDict) ->
+  set_to_string(T);
 t_to_string(?number(?any, ?unknown_qual), _RecDict) -> "number()";
 t_to_string(?product(List), RecDict) ->
   "<" ++ comma_sequence(List, RecDict) ++ ">";
