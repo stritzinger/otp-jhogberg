@@ -2570,14 +2570,22 @@ t_sup(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
 	 (K, _,     V1, _,     V2) -> {K, ?opt,  t_sup(V1, V2)}
       end, A, B),
   t_map(Pairs, t_sup(ADefK, BDefK), t_sup(ADefV, BDefV));
-%% Union of 1 or more nominal types
+%% Union of 1 or more nominal types/nominal sets
 t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
+%Using force_union for the homogeneous union seems to be an overkill 
   ?nominal(Name, t_sup(S1, S2));
-%append both nominal types to the corresponding entries
-t_sup(?nominal(_,_)=T1, ?nominal(_,_)=T2) ->
-  ?union(U1) = force_union(T1),
-  ?union(U2) = force_union(T2),
-  sup_union(U1,U2);
+%For 2 different nominals, construct a new nominal set with 2 elements (no slot assignment needed?)
+t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
+  if
+    N1 < N2   -> ?nominal_set([T1|T2]);
+    N1 > N2   -> ?nominal_set([T2|T1])
+  end;
+t_sup(?nominal_set(_) = T1,?nominal_set(_) = T2) ->
+  sup_nominal_sets(T1,T2,[]);
+t_sup(?nominal_set(_) = T1,?nominal(_,_) = T2) -> 
+  sup_nominal_sets(T1,?nominal_set([T2]),[]);
+t_sup(?nominal(_,_)=T1,?nominal_set(_) = T2) ->
+  t_sup(T2,T1);
 %if t_inf(S1,S2) empty, append nominal to the corresponding entry, else t_sup(S1,S2) (we lose some precision here because we can't do set subtraction)
 t_sup(?nominal(_,S1)=T1, S2) ->
   Inf = t_inf(S1, S2),
@@ -2589,17 +2597,13 @@ t_sup(?nominal(_,S1)=T1, S2) ->
   end;
 t_sup(S1, ?nominal(_,_)=T2) ->
   t_sup(T2,S1);
-t_sup(?nominal_set(_) = T1,?nominal_set(_) = T2) ->
-  ?union(U1) = force_union(T1),
-  ?union(U2) = force_union(T2),
-  sup_union(U1,U2);
-t_sup(?nominal_set(_) = T1,?nominal(_,_) = T2) -> 
-  ?union(U1) = force_union(T1),
-  ?union(U2) = force_union(T2),
-  sup_union(U1,U2);
-%TODO: Remove the nominals in T1 that overlap with S
-t_sup(?nominal_set(_),_) ->
-  t_none();
+%Remove te nominals in T1 that overlap with S by recursively taking the union of the first nominal in the set and the structral type
+t_sup(?nominal_set([H|T]),S) ->
+  if T == [] -> S;
+    true -> t_sup(?nominal_set(T), t_sup(H, S))
+  end;
+t_sup(S,?nominal_set(_)=T2) ->
+  t_sup(T2,S);
 t_sup(T1, T2) ->
   ?union(U1) = force_union(T1),
   ?union(U2) = force_union(T2),
@@ -2632,6 +2636,17 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
   [t_sup(T1, T2)|t_sup_lists(Left1, Left2)];
 t_sup_lists([], []) ->
   [].
+
+sup_nominal_sets([?nominal(Name, S1)|Left1], [?nominal(Name, S2)|Left2], Acc) ->
+  NewAcc = [?nominal(Name, t_sup(S1, S2))|Acc],
+  sup_tuple_sets(Left1, Left2, NewAcc);
+sup_nominal_sets([?nominal(Name1, _) = T1|Left1] = L1,
+	       [?nominal(Name2, _) = T2|Left2] = L2, Acc) ->
+  if Name1 < Name2 -> sup_nominal_sets(Left1, L2, [T1|Acc]);
+     Name1 > Name2 -> sup_nominal_sets(L1, Left2, [T2|Acc])
+  end;
+sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
+sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_tuple_sets(L1, L2) ->
   TotalArities = ordsets:union([Arity || {Arity, _} <- L1],
@@ -2726,10 +2741,6 @@ force_union(T = ?opaque(_)) ->        ?opaque_union(T);
 force_union(T = ?map(_,_,_)) ->       ?map_union(T);
 force_union(T = ?tuple(_, _, _)) ->   ?tuple_union(T);
 force_union(T = ?tuple_set(_)) ->     ?tuple_union(T);
-force_union(T = ?nominal_set([H|T])) ->
-  U1 = force_union(H),
-  U2 = force_union(T),
-  sup_union(U1,U2);
 force_union(T = ?nominal(_, _)) -> 
   AtomSlot = t_inf(T, t_atom()),
   BitstrSlot = t_inf(T, t_bitstr()),
@@ -2900,7 +2911,23 @@ t_inf(?nominal_set(_)=T1,?nominal_set(_)=T2,Opaques) ->
 t_inf(?nominal_set([?nominal(N,S1)|_]), ?nominal(N,S2),_)-> 
   ?nominal(N, t_inf(S1,S2));
 t_inf(?nominal_set([_|T]), ?nominal(_,_) = N,_) -> 
-  t_inf(T,N);
+  if T == [] -> ?none;
+    true -> t_inf(?nominal_set(T), N)
+  end;
+t_inf(?nominal(_,_)=T1,?nominal_set(_)=T2,Opaques) ->
+  t_inf(T2,T1,Opaques);
+% To evaluate the inf of a nominal set and a structural type, check the inf of the nominal type against the structural type one by one, and only union the non-empty intersections
+t_inf(?nominal_set([H|T]), S, Opaques) ->
+  Inf = t_inf(H,S),
+  if T == [] -> Inf;
+    true -> 
+      case t_is_none_or_unit(Inf) of
+        true -> t_inf(?nominal_set(T), S);
+        false -> t_sup(t_inf(?nominal_set(T), S, Opaques), Inf)
+      end
+  end;
+t_inf(S, ?nominal_set(_)=T2, Opaques) ->
+  t_inf(T2, S, Opaques);
 t_inf(?nil, ?nil, _Opaques) -> ?nil;
 t_inf(?nil, ?nonempty_list(_, _), _Opaques) ->
   ?none;
@@ -3143,7 +3170,7 @@ t_inf_lists_strict([], [], Acc, _Opaques) ->
 inf_nominal_sets([?nominal(Name1, S1)|Ts1] = L1, [?nominal(Name2, S2)|Ts2] = L2, Acc, Opaques) ->
   if Name1 < Name2 -> inf_nominal_sets(Ts1, L2, Acc, Opaques);
      Name1 > Name2 -> inf_nominal_sets(L1, Ts2, Acc, Opaques);
-     Name1 == Name2 -> inf_nominal_sets(Ts1,Ts2,[t_inf(?nominal(Name1,S1),?nominal(Name2,S2))|Acc], Opaques)
+     Name1 == Name2 -> inf_nominal_sets(Ts1,Ts2,[?nominal(Name1,t_inf(S1,S2))|Acc], Opaques)
   end;
 inf_nominal_sets([], _, Acc, _Opaques) -> lists:reverse(Acc);
 inf_nominal_sets(_, [], Acc, _Opaques) -> lists:reverse(Acc).
@@ -4563,8 +4590,6 @@ from_form({type, _Anno, no_return, []}, _S, _D, L, C) ->
   {t_unit(), L, C};
 from_form({type, _Anno, node, []}, _S, _D, L, C) ->
   {t_node(), L, C};
-%from_form({type, _Anno, nominal, A}, _S, _D, _L, _C) -> 
-%  io:format("~p",[A]);
 from_form({type, _Anno, nominal, [{atom, _Anno1, Name},Type]}, S, D, L, C) -> 
   {T, L1, C1} = from_form(Type, S, D, L, C),
   {t_nominal(Name, T), L1, C1};
