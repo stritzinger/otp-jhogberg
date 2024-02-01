@@ -2577,8 +2577,8 @@ t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
 %For 2 different nominals, construct a new nominal set with 2 elements (no slot assignment needed?)
 t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
   if
-    N1 < N2   -> ?nominal_set([T1|T2]);
-    N1 > N2   -> ?nominal_set([T2|T1])
+    N1 < N2   -> ?nominal_set([T1,T2]);
+    N1 > N2   -> ?nominal_set([T2,T1])
   end;
 t_sup(?nominal_set(_) = T1,?nominal_set(_) = T2) ->
   sup_nominal_sets(T1,T2,[]);
@@ -2597,11 +2597,11 @@ t_sup(?nominal(_,S1)=T1, S2) ->
   end;
 t_sup(S1, ?nominal(_,_)=T2) ->
   t_sup(T2,S1);
-%Remove te nominals in T1 that overlap with S by recursively taking the union of the first nominal in the set and the structral type
+%Remove the nominals in T1 that overlap with S by recursively taking the union of the first nominal in the set and the structral type
+t_sup(?nominal_set([H]),S) ->
+  t_sup(H,S);
 t_sup(?nominal_set([H|T]),S) ->
-  if T == [] -> S;
-    true -> t_sup(?nominal_set(T), t_sup(H, S))
-  end;
+  t_sup(?nominal_set(T), t_sup(H, S));
 t_sup(S,?nominal_set(_)=T2) ->
   t_sup(T2,S);
 t_sup(T1, T2) ->
@@ -2910,21 +2910,20 @@ t_inf(?nominal_set(_)=T1,?nominal_set(_)=T2,Opaques) ->
   inf_nominal_sets(T1,T2,[],Opaques);
 t_inf(?nominal_set([?nominal(N,S1)|_]), ?nominal(N,S2),_)-> 
   ?nominal(N, t_inf(S1,S2));
+t_inf(?nominal_set([?nominal(_,_)]), ?nominal(_,_),_) -> 
+  ?none;
 t_inf(?nominal_set([_|T]), ?nominal(_,_) = N,_) -> 
-  if T == [] -> ?none;
-    true -> t_inf(?nominal_set(T), N)
-  end;
+  t_inf(?nominal_set(T), N);
 t_inf(?nominal(_,_)=T1,?nominal_set(_)=T2,Opaques) ->
   t_inf(T2,T1,Opaques);
 % To evaluate the inf of a nominal set and a structural type, check the inf of the nominal type against the structural type one by one, and only union the non-empty intersections
+t_inf(?nominal_set([H]), S, Opaques) ->
+  t_inf(H,S,Opaques);
 t_inf(?nominal_set([H|T]), S, Opaques) ->
-  Inf = t_inf(H,S),
-  if T == [] -> Inf;
-    true -> 
-      case t_is_none_or_unit(Inf) of
-        true -> t_inf(?nominal_set(T), S);
-        false -> t_sup(t_inf(?nominal_set(T), S, Opaques), Inf)
-      end
+  Inf = t_inf(H,S,Opaques),
+  case t_is_none_or_unit(Inf) of
+      true -> t_inf(?nominal_set(T), S);
+      false -> t_sup(t_inf(?nominal_set(T), S, Opaques), Inf)
   end;
 t_inf(S, ?nominal_set(_)=T2, Opaques) ->
   t_inf(T2, S, Opaques);
