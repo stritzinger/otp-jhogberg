@@ -2572,9 +2572,7 @@ t_sup(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
   t_map(Pairs, t_sup(ADefK, BDefK), t_sup(ADefV, BDefV));
 %% Union of 1 or more nominal types/nominal sets
 t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
-%Using force_union for the homogeneous union seems to be an overkill 
   ?nominal(Name, t_sup(S1, S2));
-%For 2 different nominals, construct a new nominal set with 2 elements (no slot assignment needed?)
 t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
   if
     N1 < N2   -> ?nominal_set([T1,T2]);
@@ -2586,18 +2584,17 @@ t_sup(?nominal_set(_) = T1,?nominal(_,_) = T2) ->
   sup_nominal_sets(T1,?nominal_set([T2]),[]);
 t_sup(?nominal(_,_)=T1,?nominal_set(_) = T2) ->
   t_sup(T2,T1);
-%if t_inf(S1,S2) empty, append nominal to the corresponding entry, else t_sup(S1,S2) (we lose some precision here because we can't do set subtraction)
 t_sup(?nominal(_,S1)=T1, S2) ->
   Inf = t_inf(S1, S2),
   case t_is_none_or_unit(Inf) of
     true -> 
       ?union(U1) = force_union(T1),
-      sup_union(U1,S2);
+      ?union(U2) = force_union(S2),
+      sup_union(U1,U2);
     false -> t_sup(S1, S2)
   end;
 t_sup(S1, ?nominal(_,_)=T2) ->
   t_sup(T2,S1);
-%Remove the nominals in T1 that overlap with S by recursively taking the union of the first nominal in the set and the structral type
 t_sup(?nominal_set([H]),S) ->
   t_sup(H,S);
 t_sup(?nominal_set([H|T]),S) ->
@@ -2711,6 +2708,8 @@ sup_tuples_in_set([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_tuples_in_set(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_union(U1, U2) ->
+  true = length(U1) =:= length(U2), %Assertion.
+  true = ?num_types_in_union =:= length(U1), %Assertion
   sup_union(U1, U2, 0, []).
 
 sup_union([?none|Left1], [?none|Left2], N, Acc) ->
@@ -2916,7 +2915,6 @@ t_inf(?nominal_set([_|T]), ?nominal(_,_) = N,_) ->
   t_inf(?nominal_set(T), N);
 t_inf(?nominal(_,_)=T1,?nominal_set(_)=T2,Opaques) ->
   t_inf(T2,T1,Opaques);
-% To evaluate the inf of a nominal set and a structural type, check the inf of the nominal type against the structural type one by one, and only union the non-empty intersections
 t_inf(?nominal_set([H]), S, Opaques) ->
   t_inf(H,S,Opaques);
 t_inf(?nominal_set([H|T]), S, Opaques) ->
