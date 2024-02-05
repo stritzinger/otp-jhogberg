@@ -29,63 +29,55 @@ extern "C"
 #include "beam_common.h"
 }
 
-static const Uint32 INTERNAL_HASH_SALT = 3432918353;
-static const Uint32 HCONST = 0x9E3779B9;
-
-/*
- * ARG4 = lower 32
- * ARG5 = upper 32
+/* ARG2 = term
  *
- * Helper function for calculating the internal hash of keys before looking
- * them up in a map.
+ * Helper for calculating the internal hash of keys before looking them up in a
+ * map. This is a manual expansion of `erts_internal_hash`, and all changes to
+ * that function must be mirrored here.
  *
- * This is essentially just a manual expansion of the `UINT32_HASH_2` macro.
- * Whenever the internal hash algorithm is updated, this and all of its users
- * must follow suit.
- *
- * Result is returned in ARG3. */
+ * Result in ARG3. */
 void BeamGlobalAssembler::emit_internal_hash_helper() {
-    x86::Gp hash = ARG3d, lower = ARG4d, upper = ARG5d;
+    x86::Gp key = ARG2, key_hash = ARG3;
 
-    a.mov(hash, imm(INTERNAL_HASH_SALT));
-    a.add(lower, imm(HCONST));
-    a.add(upper, imm(HCONST));
-
-#if defined(ERL_INTERNAL_HASH_CRC32C)
-    a.mov(ARG6d, hash);
-    a.crc32(hash, lower);
-    a.add(hash, ARG6d);
-    a.crc32(hash, upper);
-#else
-    using rounds =
-            std::initializer_list<std::tuple<x86::Gp, x86::Gp, x86::Gp, int>>;
-    for (const auto &round : rounds{{lower, upper, hash, 13},
-                                    {upper, hash, lower, -8},
-                                    {hash, lower, upper, 13},
-                                    {lower, upper, hash, 12},
-                                    {upper, hash, lower, -16},
-                                    {hash, lower, upper, 5},
-                                    {lower, upper, hash, 3},
-                                    {upper, hash, lower, -10},
-                                    {hash, lower, upper, 15}}) {
-        const auto &[r_a, r_b, r_c, shift] = round;
-
-        a.sub(r_a, r_b);
-        a.sub(r_a, r_c);
-
-        /* We have no use for the type constant anymore, reuse its register for
-         * the `a ^= r_c << shift` expression. */
-        a.mov(ARG6d, r_c);
-
-        if (shift > 0) {
-            a.shr(ARG6d, imm(shift));
-        } else {
-            a.shl(ARG6d, imm(-shift));
-        }
-
-        a.xor_(r_a, ARG6d);
+    /* Unsigned multiplication instructions on x86 either use RDX as an
+     * implicit source or clobber it. Sigh. */
+    if (key == x86::rdx) {
+        a.mov(TMP_MEM1q, x86::rdx);
+    } else {
+        ASSERT(key_hash == x86::rdx);
     }
-#endif
+
+    /* key_hash = key ^ (key >> 33); */
+    a.mov(ARG4, ARG2);
+    a.shr(ARG4, imm(33));
+    a.mov(x86::rdx, ARG2);
+    a.xor_(x86::rdx, ARG4);
+
+    /* `RDX * ARG6` storing a 128 bit result in ARG4:RDX. We only want the
+     * lower 64 bits in RDX.
+     *
+     * key_hash *= 0xFF51AFD7ED558CCDull */
+    mov_imm(ARG6, 0xFF51AFD7ED558CCDull);
+    a.mulx(ARG4, x86::rdx, ARG6);
+
+    /* key_hash ^= key_hash >> 33; */
+    a.mov(ARG4, x86::rdx);
+    a.shr(ARG4, imm(33));
+    a.xor_(x86::rdx, ARG4);
+
+    /* key_hash *= 0xC4CEB9FE1A85EC53ull */
+    mov_imm(ARG6, 0xC4CEB9FE1A85EC53ull);
+    a.mulx(ARG4, x86::rdx, ARG6);
+
+    /* key_hash ^= key_hash >> 33; */
+    a.mov(ARG4, x86::rdx);
+    a.shr(ARG4, imm(33));
+    a.xor_(x86::rdx, ARG4);
+
+    if (key == x86::rdx) {
+        a.mov(key_hash, x86::rdx);
+        a.mov(key, TMP_MEM1q);
+    }
 
 #ifdef DBG_HASHMAP_COLLISION_BONANZA
     a.mov(TMP_MEM1q, ARG1);
@@ -97,14 +89,12 @@ void BeamGlobalAssembler::emit_internal_hash_helper() {
     runtime_call<2>(erts_dbg_hashmap_collision_bonanza);
     emit_leave_runtime();
 
-    a.mov(ARG3d, RETd);
+    a.mov(ARG3, RET);
 
     a.mov(ARG1, TMP_MEM1q);
     a.mov(ARG2, TMP_MEM2q);
     a.mov(RET, TMP_MEM3q);
 #endif
-
-    a.ret();
 }
 
 /* ARG1 = hash map root, ARG2 = key, ARG3 = key hash, RETd = node header
@@ -113,7 +103,7 @@ void BeamGlobalAssembler::emit_internal_hash_helper() {
 void BeamGlobalAssembler::emit_hashmap_get_element() {
     Label node_loop = a.newLabel();
 
-    x86::Gp node = ARG1, key = ARG2, key_hash = ARG3d, header_val = RETd,
+    x86::Gp node = ARG1, key = ARG2, key_hash = ARG3, header_val = RETd,
             index = ARG4d, depth = ARG5d;
 
     const int header_shift =
@@ -131,7 +121,7 @@ void BeamGlobalAssembler::emit_hashmap_get_element() {
 
         /* Find out which child we should follow, and shift the hash for the
          * next round. */
-        a.mov(index, key_hash);
+        a.mov(index, key_hash.r32());
         a.and_(index, imm(0xF));
         a.shr(key_hash, imm(4));
         a.inc(depth);
@@ -171,7 +161,7 @@ void BeamGlobalAssembler::emit_hashmap_get_element() {
         /* Nope, we have to search another node. */
         a.mov(header_val, emit_boxed_val(node, 0, sizeof(Uint32)));
 
-        /* After 8 nodes we've run out of the 32 bits we started with
+        /* After 8/16 nodes we've run out of the hash bits we've started with
          * and we end up in a collision node. */
         a.test(depth, imm(HAMT_MAX_LEVEL - 1));
         a.short_().jnz(node_loop);
@@ -375,9 +365,11 @@ void BeamGlobalAssembler::emit_i_get_map_element_shared() {
 
     a.bind(generic);
     {
+        emit_enter_frame();
         emit_enter_runtime();
         runtime_call<2>(get_map_element);
         emit_leave_runtime();
+        emit_leave_frame();
 
         emit_test_the_non_value(RET);
 
@@ -390,13 +382,9 @@ void BeamGlobalAssembler::emit_i_get_map_element_shared() {
 
     a.bind(hashmap);
     {
-        /* Calculate the internal hash of ARG2 before diving into the HAMT. */
-        a.mov(ARG5, ARG2);
-        a.shr(ARG5, imm(32));
-        a.mov(ARG4d, ARG2d);
-
-        a.call(labels[internal_hash_helper]);
-
+        /* Calculate the internal hash of the key before diving into the
+         * HAMT. */
+        emit_internal_hash_helper();
         emit_hashmap_get_element();
     }
 }
@@ -586,21 +574,45 @@ void BeamGlobalAssembler::emit_update_map_assoc_shared() {
     a.ret();
 }
 
+/* ARG2 = key
+ * ARG3 = value
+ * ARG4 = map
+ */
+void BeamGlobalAssembler::emit_update_map_single_assoc_shared() {
+    emit_enter_frame();
+    emit_enter_runtime<Update::eHeapAlloc>();
+
+    a.mov(ARG1, c_p);
+    runtime_call<4>(erts_maps_put);
+
+    emit_leave_runtime<Update::eHeapAlloc>();
+    emit_leave_frame();
+
+    a.ret();
+}
+
 void BeamModuleAssembler::emit_update_map_assoc(const ArgSource &Src,
                                                 const ArgRegister &Dst,
                                                 const ArgWord &Live,
                                                 const ArgWord &Size,
                                                 const Span<ArgVal> &args) {
-    Label data = embed_vararg_rodata(args, CP_SIZE);
-
     ASSERT(Size.get() == args.size());
 
-    mov_arg(getXRef(Live.get()), Src);
+    if (args.size() == 2) {
+        mov_arg(ARG2, args[0]);
+        mov_arg(ARG3, args[1]);
+        mov_arg(ARG4, Src);
+        safe_fragment_call(ga->get_update_map_single_assoc_shared());
+    } else {
+        Label data = embed_vararg_rodata(args, CP_SIZE);
 
-    mov_imm(ARG3, Live.get());
-    mov_imm(ARG4, args.size());
-    a.lea(ARG5, x86::qword_ptr(data));
-    fragment_call(ga->get_update_map_assoc_shared());
+        mov_arg(getXRef(Live.get()), Src);
+
+        mov_imm(ARG3, Live.get());
+        mov_imm(ARG4, args.size());
+        a.lea(ARG5, x86::qword_ptr(data));
+        fragment_call(ga->get_update_map_assoc_shared());
+    }
 
     mov_arg(Dst, RET);
 }
@@ -651,28 +663,70 @@ void BeamGlobalAssembler::emit_update_map_exact_body_shared() {
     }
 }
 
+/* ARG2 = key
+ * ARG3 = value
+ * ARG4 = map
+ *
+ * Does not return on error. */
+void BeamGlobalAssembler::emit_update_map_single_exact_body_shared() {
+    Label error = a.newLabel();
+
+    a.mov(TMP_MEM2q, ARG2);
+
+    emit_enter_frame();
+    emit_enter_runtime<Update::eHeapAlloc>();
+
+    a.mov(ARG1, c_p);
+    a.lea(ARG5, TMP_MEM1q);
+    runtime_call<5>(erts_maps_update);
+
+    emit_leave_runtime<Update::eHeapAlloc>();
+    emit_leave_frame();
+
+    a.test(RETd, RETd);
+    a.short_().je(error);
+
+    a.mov(RET, TMP_MEM1q);
+    a.ret();
+
+    a.bind(error);
+    {
+        a.mov(RET, TMP_MEM2q);
+        a.mov(x86::qword_ptr(c_p, offsetof(Process, freason)), imm(BADKEY));
+        a.mov(x86::qword_ptr(c_p, offsetof(Process, fvalue)), RET);
+        mov_imm(ARG4, 0);
+        a.jmp(labels[raise_exception]);
+    }
+}
+
 void BeamModuleAssembler::emit_update_map_exact(const ArgSource &Src,
                                                 const ArgLabel &Fail,
                                                 const ArgRegister &Dst,
                                                 const ArgWord &Live,
                                                 const ArgWord &Size,
                                                 const Span<ArgVal> &args) {
-    Label data = embed_vararg_rodata(args, CP_SIZE);
-
     ASSERT(Size.get() == args.size());
 
-    /* We _KNOW_ Src is a map */
-    mov_arg(getXRef(Live.get()), Src);
-
-    mov_imm(ARG3, Live.get());
-    mov_imm(ARG4, args.size());
-    a.lea(ARG5, x86::qword_ptr(data));
-
-    if (Fail.get() != 0) {
-        fragment_call(ga->get_update_map_exact_guard_shared());
-        a.je(resolve_beam_label(Fail));
+    if (args.size() == 2 && Fail.get() == 0) {
+        mov_arg(ARG2, args[0]);
+        mov_arg(ARG3, args[1]);
+        mov_arg(ARG4, Src);
+        fragment_call(ga->get_update_map_single_exact_body_shared());
     } else {
-        fragment_call(ga->get_update_map_exact_body_shared());
+        Label data = embed_vararg_rodata(args, CP_SIZE);
+
+        mov_arg(getXRef(Live.get()), Src);
+
+        mov_imm(ARG3, Live.get());
+        mov_imm(ARG4, args.size());
+        a.lea(ARG5, x86::qword_ptr(data));
+
+        if (Fail.get() != 0) {
+            fragment_call(ga->get_update_map_exact_guard_shared());
+            a.je(resolve_beam_label(Fail));
+        } else {
+            fragment_call(ga->get_update_map_exact_body_shared());
+        }
     }
 
     mov_arg(Dst, RET);

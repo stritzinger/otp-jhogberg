@@ -25,6 +25,7 @@
 %%----------------------------------------------------------------------
 
 -module(ssl_manager).
+-moduledoc false.
 -behaviour(gen_server).
 
 %% Internal application API
@@ -550,14 +551,12 @@ exists_equivalent(_, []) ->
 exists_equivalent(#session{
 		     peer_certificate = PeerCert,
 		     own_certificates = [OwnCert | _],
-		     compression_method = Compress,
 		     cipher_suite = CipherSuite,
 		     srp_username = SRP,
 		     ecc = ECC} , 
 		  [#session{
 		      peer_certificate = PeerCert,
 		      own_certificates = [OwnCert | _],
-		      compression_method = Compress,
 		      cipher_suite = CipherSuite,
 		      srp_username = SRP,
 		      ecc = ECC} | _]) ->

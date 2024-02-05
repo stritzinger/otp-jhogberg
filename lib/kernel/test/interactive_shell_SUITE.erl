@@ -59,6 +59,7 @@
          shell_update_window_unicode_wrap/1,
          shell_receive_standard_out/1,
          shell_standard_error_nlcr/1, shell_clear/1,
+         shell_format/1,
          remsh_basic/1, remsh_error/1, remsh_longnames/1, remsh_no_epmd/1,
          remsh_expand_compatibility_25/1, remsh_expand_compatibility_later_version/1,
          external_editor/1, external_editor_visual/1,
@@ -129,7 +130,7 @@ groups() ->
      {tty_latin1,[],[{group,tty_tests}]},
      {tty_tests, [parallel],
       [shell_navigation, shell_multiline_navigation, shell_multiline_prompt,
-       shell_xnfix, shell_delete,
+       shell_xnfix, shell_delete, shell_format,
        shell_transpose, shell_search, shell_insert,
        shell_update_window, shell_small_window_multiline_navigation, shell_huge_input,
        shell_support_ansi_input,
@@ -477,11 +478,49 @@ shell_multiline_navigation(Config) ->
         stop_tty(Term)
     end.
 
+shell_format(Config) ->
+    Term1 = start_tty([{args,["-stdlib","format_shell_func","{shell,erl_pp_format_func}"]}|Config]),
+    DataDir = proplists:get_value(data_dir, Config),
+    EmacsFormat = "\""++DataDir ++ "emacs-format-file\"\n",
+    try
+        send_tty(Term1,"fun(X) ->\n  X\nend.\n"),
+        send_tty(Term1,"Up"),
+        %% Note, erl_pp puts 7 spaces before X
+        check_content(Term1, "fun\\(X\\) ->\\s*..        X\\s*.. end."),
+        send_tty(Term1, "Down"),
+        tmux(["resize-window -t ",tty_name(Term1)," -x ",200]),
+        timer:sleep(1000),
+        send_stdin(Term1, "shell:format_shell_func(\"emacs -batch \${file} -l \"\n"),
+        send_stdin(Term1, EmacsFormat),
+        send_stdin(Term1, "\" -f emacs-format-function\").\n"),
+        check_content(Term1, "{shell,erl_pp_format_func}"),
+        send_tty(Term1, "Up"),
+        send_tty(Term1, "Up"),
+        send_tty(Term1, "\n"),
+        timer:sleep(1000),
+        send_tty(Term1, "Up"),
+        %% Note, emacs-format puts 8 spaces before X
+        check_content(Term1, "fun\\(X\\) ->\\s*..         X\\s*.. end."),
+        send_tty(Term1, "Down"),
+        send_stdin(Term1, "shell:format_shell_func({bad,format}).\n"),
+        send_tty(Term1, "Up"),
+        send_tty(Term1, "Up"),
+        send_tty(Term1, "\n"),
+        timer:sleep(1000),
+        check_content(Term1, "\\Q* Bad format function: {bad,format}\\E"),
+        send_tty(Term1, "Up"),
+        %% No modifications should be made, when default format function is used
+        check_content(Term1, "fun\\(X\\) ->\\s*..         X\\s*.. end."),
+        ok
+    after
+        stop_tty(Term1)
+    end.
+
 shell_multiline_prompt(Config) ->
-    Term1 = start_tty([{args,["-stdlib","shell_multiline_prompt","{edlin,inverted_space_prompt}"]}|Config]),
+    Term1 = start_tty([{args,["-stdlib","shell_multiline_prompt","{shell,inverted_space_prompt}"]}|Config]),
     Term2 = start_tty([{args,["-stdlib","shell_multiline_prompt","\"...> \""]}|Config]),
     Term3 = start_tty([{args,["-stdlib","shell_multiline_prompt","edlin"]}|Config]),
-
+    Term4 = start_tty(Config),
     try
         check_location(Term1, {0, 0}),
         send_tty(Term1,"\na"),
@@ -507,6 +546,15 @@ shell_multiline_prompt(Config) ->
         ok
     after
         stop_tty(Term3)
+    end,
+    try
+        send_tty(Term4, "shell:multiline_prompt_func(\"-> \").\n"),
+        check_content(Term4, "default"),
+        send_tty(Term4, "a\nb"),
+        check_content(Term4, "-> b"),
+        ok
+    after
+        stop_tty(Term4)
     end.
 
 shell_clear(Config) ->
@@ -905,12 +953,26 @@ shell_update_window(Config) ->
         send_tty(Term,"a"),
         check_location(Term, {0, -Col}),
         send_tty(Term,"BSpace"),
+        check_location(Term, {-1, width(Text)}),
         tmux(["resize-window -t ",tty_name(Term)," -x ",width(Text)+Col]),
-        %% xnfix bug! at least in tmux... seems to work in iTerm as it does not
-        %% need xnfix when resizing
-        check_location(Term, {0, -Col}),
+        %% When resizing, tmux does not xnfix the cursor, so it will remain
+        %% at the previous locations
+        check_location(Term, {-1, width(Text)}),
+        send_tty(Term,"a"),
+        check_location(Term, {0, -Col + 1}),
+
+        %% When we do backspace here, tmux seems to place the cursor in an
+        %% incorrect position except when a terminal is attached.
+        send_tty(Term,"BSpace"),
+        %% This really should be {0, -Col}, but sometimes tmux sets it to
+        %% {-1, width(Text)} instead.
+        check_location(Term, [{0, -Col}, {-1, width(Text)}]),
+
         tmux(["resize-window -t ",tty_name(Term)," -x ",width(Text) div 2 + Col]),
-        check_location(Term, {0, -Col + width(Text) div 2}),
+        %% Depending on what happened with the cursor above, the line will be
+        %% different here.
+        check_location(Term, [{0, -Col + width(Text) div 2},
+                              {-1, -Col + width(Text) div 2}]),
         ok
     after
         stop_tty(Term)
@@ -1059,9 +1121,10 @@ shell_expand_location_below(Config) ->
 
     Term = start_tty(Config),
 
-    {Rows, _} = get_location(Term),
+    {Rows, _} = get_window_size(Term),
+    {Row, Col} = get_location(Term),
 
-    NumFunctions = lists:seq(0, Rows*2),
+    NumFunctions = lists:seq(0, Row*2),
     FunctionName = "a_long_function_name",
 
     Module = lists:flatten(
@@ -1080,6 +1143,7 @@ shell_expand_location_below(Config) ->
 
     try
         tmux(["resize-window -t ",tty_name(Term)," -x 80"]),
+        Cols = 80,
 
         %% First check that basic completion works
         send_stdin(Term, "escript:"),
@@ -1119,24 +1183,81 @@ shell_expand_location_below(Config) ->
                           {module, long_module} = code:load_binary(long_module, "long_module.beam", Bin)
                   end),
         check_content(Term, "3>"),
+        tmux(["resize-window -t ",tty_name(Term)," -y 50"]),
+        timer:sleep(1000), %% Sleep to make sure window has resized
+        Result = 61,
+        Rows1 = 48,
         send_stdin(Term, "long_module:" ++ FunctionName),
         send_stdin(Term, "\t"),
+        check_content(Term, "3> long_module:" ++ FunctionName ++ "\nfunctions(\n|.)*a_long_function_name0\\("),
+
         %% Check that correct text is printed below expansion
-        check_content(Term, io_lib:format("Press tab to see all ~p expansions",
-                                          [length(NumFunctions)])),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [1, 7, Result])),
         send_stdin(Term, "\t"),
-        %% The expansion does not fit on screen, verify that
-        %% expand above mode is used
-        check_content(fun() -> get_content(Term, "-S -5") end,
-                      "\nfunctions\n"),
-        check_content(Term, "3> long_module:" ++ FunctionName ++ "$"),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+            [1, Rows1, Result])),
+        send_tty(Term, "Down"),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [2, Rows1+1, Result])),
+        send_tty(Term, "PgDn"),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [7, Rows1+6, Result])),
+        send_tty(Term, "PgUp"),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [2, Rows1+1, Result])),
+        send_tty(Term, "PgUp"),
+        %% Overshoot up
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [1, Rows1, Result])),
+        %% Overshoot down
+        send_tty(Term, "PgDn"),
+        send_tty(Term, "PgDn"),
+        send_tty(Term, "PgDn"),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [14, Rows1+13, Result])),
+        check_content(Term, "\n.*a_long_function_name99\\("),
+        send_tty(Term, "Up"),
+        check_content(Term, io_lib:format("rows ~w to ~w of ~w",
+                                          [13, Rows1+12, Result])),
+
+        send_tty(Term, "\t"),
 
         %% We resize the terminal to make everything fit and test that
-        %% expand below mode is used
-        tmux(["resize-window -t ", tty_name(Term), " -y ", integer_to_list(Rows+10)]),
+        %% expand below displays everything
+        tmux(["resize-window -t ", tty_name(Term), " -y ", integer_to_list(Row+10)]),
         timer:sleep(1000), %% Sleep to make sure window has resized
-        send_stdin(Term, "\t\t"),
+        send_tty(Term, "\t\t"),
         check_content(Term, "3> long_module:" ++ FunctionName ++ "\nfunctions(\n|.)*a_long_function_name99\\($"),
+
+        %% Check that doing an expansion when cursor is in xnfix position works
+        send_tty(Term, "BSpace"),
+        check_content(Term, "3> long_module:a_long_function_nam$"),
+        send_tty(Term, "Home"),
+        send_tty(Term, lists:duplicate(Cols - Col - width(", long_module:a_long_function_name"), "a")),
+        send_tty(Term, ", "),
+        send_tty(Term, "End"),
+        send_tty(Term, "\t"),
+        check_location(Term, {-Rows + 2, -Col}),
+        send_tty(Term, "\t"),
+        check_content(Term, "3> a+, long_module:" ++ FunctionName ++ "\n\nfunctions(\n|.)*a_long_function_name0\\("),
+        check_location(Term, {-Rows + 2, -Col}),
+        send_tty(Term, "Down"),
+        check_location(Term, {-Rows + 2, -Col}),
+        send_tty(Term, "Down"),
+        check_location(Term, {-Rows + 2, -Col}),
+
+        send_tty(Term, "Home"),
+        send_tty(Term, lists:duplicate(Cols, "b")),
+        send_tty(Term, "End"),
+        send_tty(Term, "\t"),
+        check_content(Term, "3> b+\nb+a+, long_module:" ++ FunctionName ++ "\n\nfunctions(\n|.)*a_long_function_name0\\("),
+        check_location(Term, {-Rows + 3, -Col}),
+        send_tty(Term, "Down"),
+        check_location(Term, {-Rows + 3, -Col}),
+        send_tty(Term, "Down"),
+        check_location(Term, {-Rows + 3, -Col}),
+
         ok
     after
         stop_tty(Term),
@@ -1165,6 +1286,20 @@ shell_expand_location_above(Config) ->
         ok
     end.
 
+shell_help(Config) ->
+    Term = start_tty(Config),
+    try
+        send_stdin(Term, "lists"),
+        send_stdin(Term, "\^[h"),
+        check_content(Term, "List processing functions."),
+        send_stdin(Term, ":all"),
+        send_stdin(Term, "\^[h"),
+        check_content(Term, "-spec all(Pred, List) -> boolean()"),
+        ok
+    after
+        stop_tty(Term),
+        ok
+    end.
 %% Test the we can handle invalid ansi escape chars.
 %%   tmux cannot handle this... so we test this using to_erl
 shell_invalid_ansi(_Config) ->
@@ -1624,6 +1759,7 @@ setup_tty(Config) ->
                                   "-kernel","prevent_overlapping_partitions","false",
                                   "-eval","shell:prompt_func({interactive_shell_SUITE,prompt})."
                                  ] ++ Envs ++ ExtraArgs,
+                         wait_boot => 60_000,
                          detached => false
                        },
 
@@ -1733,17 +1869,21 @@ send_stdin(Term, Chars) ->
 
 check_location(Term, Where) ->
     check_location(Term, Where, 5).
+check_location(Term, Where, Attempt) when is_tuple(Where) ->
+    check_location(Term, [Where], Attempt);
 check_location(#tmux{ orig_location = {OrigRow, OrigCol} = Orig } = Term,
-               {AdjRow, AdjCol} = Where, Attempt) ->
+               Where, Attempt) ->
     NewLocation = get_location(Term),
-    case {OrigRow+AdjRow,OrigCol+AdjCol} of
-        NewLocation -> NewLocation;
-        _ when Attempt =:= 0 ->
+    case lists:any(fun({AdjRow, AdjCol}) ->
+                           {OrigRow+AdjRow,OrigCol+AdjCol} =:= NewLocation
+                   end, Where) of
+        true -> NewLocation;
+        false when Attempt =:= 0 ->
             {NewRow, NewCol} = NewLocation,
-            ct:fail({wrong_location, {expected,{AdjRow, AdjCol}},
+            ct:fail({wrong_location, {expected,Where},
                      {got,{NewRow - OrigRow, NewCol - OrigCol},
                       {NewLocation, Orig}}});
-        _ ->
+        false ->
             timer:sleep(50),
             check_location(Term, Where, Attempt -1)
     end.

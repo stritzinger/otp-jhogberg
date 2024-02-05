@@ -20,6 +20,7 @@
 
 %%
 -module(dbg_wx_break).
+-moduledoc false.
 
 %% External exports
 -export([start/3, start/4, start/5]).
@@ -89,10 +90,10 @@ gui_cmd({break, DataL, Action}, _Win) ->
 	fun(Data) ->
 		case Data of
 		    [Mod, Line] ->
-			int:break(Mod, Line),
+			_ = int:break(Mod, Line),
 			int:action_at_break(Mod, Line, Action);
 		    [Mod, Line, CMod, CFunc] ->
-			int:break(Mod, Line),
+			_ = int:break(Mod, Line),
 			int:test_at_break(Mod, Line, {CMod, CFunc}),
 			int:action_at_break(Mod, Line, Action);
 		    [Mod, Func, Arity] ->

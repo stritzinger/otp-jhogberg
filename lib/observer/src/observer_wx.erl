@@ -17,6 +17,7 @@
 %%
 %% %CopyrightEnd%
 -module(observer_wx).
+-moduledoc false.
 
 -behaviour(wx_object).
 
@@ -557,16 +558,16 @@ code_change(_, _, State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 try_rpc(Node, Mod, Func, Args) ->
-    case
-	rpc:call(Node, Mod, Func, Args) of
-	{badrpc, Reason} ->
+    try erpc:call(Node, Mod, Func, Args)
+    catch
+        error:{erpc, Reason} ->
 	    error_logger:error_report([{node, Node},
 				       {call, {Mod, Func, Args}},
 				       {reason, {badrpc, Reason}}]),
 	    observer ! {nodedown, Node},
 	    error({badrpc, Reason});
-	Res ->
-	    Res
+        Class:Reason ->
+            {error, {Class,Reason}}
     end.
 
 return_to_localnode(Frame, Node) ->

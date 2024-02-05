@@ -31,6 +31,7 @@
 
 -define(SECRET_PRINTOUT, "***").
 
+-doc(#{title => <<"Types used in TLS/DTLS">>}).
 -type reason()            :: any().
 -type reply()             :: any().
 -type msg()               :: any().
@@ -73,6 +74,9 @@
 -define(NULL, 0).
 -define(TRUE, 0).
 -define(FALSE, 1).
+
+
+-define(NO_COMPRESSION, ?NULL).
 
 %% sslv3 is considered insecure due to lack of padding check (Poodle attack)
 %% Keep as interop with legacy software but do not support as default
@@ -201,7 +205,6 @@
         }).
 
 -define(DEFAULT_DEPTH, 10).
--define(DEFAULT_OCSP_STAPLING, false).
--define(DEFAULT_OCSP_NONCE, true).
--define(DEFAULT_OCSP_RESPONDER_CERTS, []).
+-define(DEFAULT_STAPLING_OPT, no_staple).
+-define(DEFAULT_OCSP_NONCE_OPT, true).
 -endif. % -ifdef(ssl_internal).

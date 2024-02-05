@@ -18,6 +18,12 @@
 %% %CopyrightEnd%
 %%
 -module(crashdump_viewer).
+-moduledoc """
+A WxWidgets based tool for browsing Erlang crashdumps.
+
+For details about how to get started with the Crashdump Viewer, see the
+[User's Guide](crashdump_ug.md).
+""".
 
 %%
 %% This module is the main module in the crashdump viewer. It implements
@@ -185,11 +191,21 @@ stop_debug() ->
 
 %%%-----------------------------------------------------------------
 %%% User API
+-doc """
+Starts the Crashdump Viewer GUI and opens a file dialog where the
+crashdump can be selected.
+""".
+-spec start() -> ok | {error, term()}.
 start() ->
-    start(undefined).
+    cdv_wx:start(undefined).
+-doc "Starts the Crashdump Viewer GUI and loads the specified crashdump.".
+-doc #{ since => "OTP 17.0" }.
+-spec start(File :: string()) -> ok | {error, term()}.
 start(File) ->
     cdv_wx:start(File).
 
+-doc "Terminates the Crashdump Viewer and closes all GUI windows.".
+-spec stop() -> ok.
 stop() ->
     case whereis(?SERVER) of
 	undefined ->
@@ -2894,7 +2910,12 @@ parse_heap_term("Mh"++Line0, Addr, DecodeOpts, D0) -> %Head node in a hashmap.
     {Map,Line,D};
 parse_heap_term("Mn"++Line0, Addr, DecodeOpts, D) -> %Interior node in a hashmap.
     {N,":"++Line} = get_hex(Line0),
-    parse_tuple(N, Line, Addr, DecodeOpts, D, []).
+    parse_tuple(N, Line, Addr, DecodeOpts, D, []);
+parse_heap_term("Rf"++Line0, Addr, _DecodeOpts, D0) -> %Fun reference
+    {N,[]} = get_hex(Line0),
+    Term = {'#CDVFRef', N},
+    D = gb_trees:insert(Addr, Term, D0),
+    {Term,[],D}.
 
 parse_tuple(0, Line, Addr, _, D0, Acc) ->
     Tuple = list_to_tuple(lists:reverse(Acc)),

@@ -1115,6 +1115,29 @@ BIF_RETTYPE ets_first_1(BIF_ALIST_1)
     BIF_RET(ret);
 }
 
+/*
+** Returns the first {key, object(s)} in a table
+*/
+BIF_RETTYPE ets_first_lookup_1(BIF_ALIST_1)
+{
+    DbTable* tb;
+    int cret;
+    Eterm ret;
+
+    CHECK_TABLES();
+
+    DB_BIF_GET_TABLE(tb, DB_READ, LCK_READ, BIF_ets_first_lookup_1);
+
+    cret = tb->common.meth->db_first_lookup(BIF_P, tb, &ret);
+
+    db_unlock(tb, LCK_READ);
+
+    if (cret != DB_ERROR_NONE) {
+	BIF_ERROR(BIF_P, BADARG);
+    }
+    BIF_RET(ret);
+}
+
 /* 
 ** The next BIF, given a key, return the "next" key 
 */
@@ -1138,6 +1161,30 @@ BIF_RETTYPE ets_next_2(BIF_ALIST_2)
     BIF_RET(ret);
 }
 
+
+/*
+** The next_lookup BIF, given a key, return the "next" {key, object(s)}
+*/
+BIF_RETTYPE ets_next_lookup_2(BIF_ALIST_2)
+{
+    DbTable* tb;
+    int cret;
+    Eterm ret;
+
+    CHECK_TABLES();
+
+    DB_BIF_GET_TABLE(tb, DB_READ, LCK_READ, BIF_ets_next_lookup_2);
+
+    cret = tb->common.meth->db_next_lookup(BIF_P, tb, BIF_ARG_2, &ret);
+
+    db_unlock(tb, LCK_READ);
+
+    if (cret != DB_ERROR_NONE) {
+	BIF_ERROR(BIF_P, BADARG);
+    }
+    BIF_RET(ret);
+}
+
 /* 
 ** Returns the last Key in a table 
 */
@@ -1152,6 +1199,29 @@ BIF_RETTYPE ets_last_1(BIF_ALIST_1)
     DB_BIF_GET_TABLE(tb, DB_READ, LCK_READ, BIF_ets_last_1);
 
     cret = tb->common.meth->db_last(BIF_P, tb, &ret);
+
+    db_unlock(tb, LCK_READ);
+
+    if (cret != DB_ERROR_NONE) {
+	BIF_ERROR(BIF_P, BADARG);
+    }
+    BIF_RET(ret);
+}
+
+/*
+** Returns the last {key, object(s)} in a table
+*/
+BIF_RETTYPE ets_last_lookup_1(BIF_ALIST_1)
+{
+    DbTable* tb;
+    int cret;
+    Eterm ret;
+
+    CHECK_TABLES();
+
+    DB_BIF_GET_TABLE(tb, DB_READ, LCK_READ, BIF_ets_last_lookup_1);
+
+    cret = tb->common.meth->db_last_lookup(BIF_P, tb, &ret);
 
     db_unlock(tb, LCK_READ);
 
@@ -1185,6 +1255,29 @@ BIF_RETTYPE ets_prev_2(BIF_ALIST_2)
 }
 
 /*
+** The prev_lookup BIF, given a key, return the "previous" {key, object(s)}
+*/
+BIF_RETTYPE ets_prev_lookup_2(BIF_ALIST_2)
+{
+    DbTable* tb;
+    int cret;
+    Eterm ret;
+
+    CHECK_TABLES();
+
+    DB_BIF_GET_TABLE(tb, DB_READ, LCK_READ, BIF_ets_prev_lookup_2);
+
+    cret = tb->common.meth->db_prev_lookup(BIF_P, tb, BIF_ARG_2, &ret);
+
+    db_unlock(tb, LCK_READ);
+
+    if (cret != DB_ERROR_NONE) {
+	BIF_ERROR(BIF_P, BADARG);
+    }
+    BIF_RET(ret);
+}
+
+/*
 ** take(Tab, Key)
 */
 BIF_RETTYPE ets_take_2(BIF_ALIST_2)
@@ -1203,35 +1296,29 @@ BIF_RETTYPE ets_take_2(BIF_ALIST_2)
     BIF_RET(ret);
 }
 
-/* 
-** update_element(Tab, Key, {Pos, Value})
-** update_element(Tab, Key, [{Pos, Value}])
-*/
-BIF_RETTYPE ets_update_element_3(BIF_ALIST_3)
+static BIF_RETTYPE do_update_element(Process *p, DbTable *tb,
+		Eterm key, Eterm pos_val, Eterm default_obj)
 {
-    DbTable* tb;
     int cret = DB_ERROR_BADITEM;
     Eterm list;
     Eterm iter;
-    DeclareTmpHeap(cell,2,BIF_P);
+    DeclareTmpHeap(cell,2,p);
     DbUpdateHandle handle;
 
-    DB_BIF_GET_TABLE(tb, DB_WRITE, LCK_WRITE_REC, BIF_ets_update_element_3);
-
-    UseTmpHeap(2,BIF_P);
+    UseTmpHeap(2,p);
     if (!(tb->common.status & (DB_SET | DB_ORDERED_SET | DB_CA_ORDERED_SET))) {
-	BIF_P->fvalue = EXI_TAB_TYPE;
+	p->fvalue = EXI_TAB_TYPE;
 	cret = DB_ERROR_BADPARAM;
 	goto bail_out;
     }
-    if (is_tuple(BIF_ARG_3)) {
-	list = CONS(cell, BIF_ARG_3, NIL);
+    if (is_tuple(pos_val)) {
+	list = CONS(cell, pos_val, NIL);
     }
     else {
-	list = BIF_ARG_3;
+	list = pos_val;
     }
 
-    if (!tb->common.meth->db_lookup_dbterm(BIF_P, tb, BIF_ARG_2, THE_NON_VALUE, &handle)) {
+    if (!tb->common.meth->db_lookup_dbterm(p, tb, key, default_obj, &handle)) {
 	cret = DB_ERROR_BADKEY;
 	goto bail_out;
     }
@@ -1256,12 +1343,13 @@ BIF_RETTYPE ets_update_element_3(BIF_ALIST_3)
 	}
 	position = signed_val(pvp[1]);
 	if (position == tb->common.keypos) {
-            BIF_P->fvalue = EXI_KEY_POS;
+            p->fvalue = EXI_KEY_POS;
             cret = DB_ERROR_UNSPEC;
             goto finalize;
 	}
-	if (position < 1 || position == tb->common.keypos ||
-	    position > arityval(handle.dbterm->tpl[0])) {
+	if (position < 1 || position > arityval(handle.dbterm->tpl[0])) {
+	    p->fvalue = EXI_POSITION;
+	    cret = DB_ERROR_UNSPEC;
 	    goto finalize;
         }
     }
@@ -1278,7 +1366,7 @@ finalize:
     tb->common.meth->db_finalize_dbterm(cret, &handle);
 
 bail_out:
-    UnUseTmpHeap(2,BIF_P);
+    UnUseTmpHeap(2,p);
     db_unlock(tb, LCK_WRITE_REC);
 
     switch (cret) {
@@ -1287,13 +1375,44 @@ bail_out:
     case DB_ERROR_BADKEY:
 	BIF_RET(am_false);
     case DB_ERROR_SYSRES:
-	BIF_ERROR(BIF_P, SYSTEM_LIMIT);
+	BIF_ERROR(p, SYSTEM_LIMIT);
     case DB_ERROR_UNSPEC:
-        BIF_ERROR(BIF_P, BADARG | EXF_HAS_EXT_INFO);
+        BIF_ERROR(p, BADARG | EXF_HAS_EXT_INFO);
     default:
 	break;
     }
-    BIF_ERROR(BIF_P, BADARG);
+    BIF_ERROR(p, BADARG);
+}
+
+/* 
+** update_element(Tab, Key, {Pos, Value})
+** update_element(Tab, Key, [{Pos, Value}])
+*/
+BIF_RETTYPE ets_update_element_3(BIF_ALIST_3)
+{
+    DbTable* tb;
+
+    DB_BIF_GET_TABLE(tb, DB_WRITE, LCK_WRITE_REC, BIF_ets_update_element_3);
+
+    return do_update_element(BIF_P, tb, BIF_ARG_2, BIF_ARG_3, THE_NON_VALUE);
+}
+
+/* 
+** update_element(Tab, Key, {Pos, Value}, Default)
+** update_element(Tab, Key, [{Pos, Value}], Default)
+*/
+BIF_RETTYPE ets_update_element_4(BIF_ALIST_4)
+{
+    DbTable* tb;
+
+    DB_BIF_GET_TABLE(tb, DB_WRITE, LCK_WRITE_REC, BIF_ets_update_element_4);
+
+    if (is_not_tuple(BIF_ARG_4)) {
+        db_unlock(tb, LCK_WRITE_REC);
+        BIF_ERROR(BIF_P, BADARG);
+    }
+
+    return do_update_element(BIF_P, tb, BIF_ARG_2, BIF_ARG_3, BIF_ARG_4);
 }
 
 static BIF_RETTYPE

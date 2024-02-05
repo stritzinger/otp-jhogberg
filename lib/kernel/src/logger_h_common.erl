@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(logger_h_common).
+-moduledoc false.
 -behaviour(gen_server).
 
 -include("logger_h_common.hrl").
@@ -168,7 +169,7 @@ changing_config(SetOrUpdate,
 %%% Log a string or report
 -spec log(LogEvent, Config) -> ok when
       LogEvent :: logger:log_event(),
-      Config :: logger:handler_config().
+      Config :: logger_handler:config().
 
 log(LogEvent, Config = #{config := #{olp:=Olp}}) ->
     %% if the handler has crashed, we must drop this event
@@ -379,7 +380,7 @@ log_handler_info(Name, Format, Args, #{module:=Module,
 %%% Convert log data on any form to binary
 -spec log_to_binary(LogEvent,Config) -> LogString when
       LogEvent :: logger:log_event(),
-      Config :: logger:handler_config(),
+      Config :: logger_handler:config(),
       LogString :: binary().
 log_to_binary(#{msg:={report,_},meta:=#{report_cb:=_}}=Log,Config) ->
     do_log_to_binary(Log,Config);

@@ -90,23 +90,22 @@ opt_opts(Mod) ->
                      ({feature,_,enable}) -> true;
                      ({feature,_,disable}) -> true;
                      (inline) -> true;
+                     (line_coverage) -> true;
+                     (no_badrecord) -> true;
                      (no_bs_create_bin) -> true;
                      (no_bsm_opt) -> true;
                      (no_bs_match) -> true;
                      (no_copt) -> true;
                      (no_fun_opt) -> true;
-                     (no_init_yregs) -> true;
-                     (no_make_fun3) -> true;
+                     (no_min_max_bifs) -> true;
                      (no_module_opt) -> true;
                      (no_postopt) -> true;
                      (no_recv_opt) -> true;
                      (no_share_opt) -> true;
-                     (no_shared_fun_wrappers) -> true;
                      (no_ssa_opt_float) -> true;
                      (no_ssa_opt_ranges) -> true;
                      (no_ssa_opt) -> true;
                      (no_stack_trimming) -> true;
-                     (no_swap) -> true;
                      (no_type_opt) -> true;
                      (_) -> false
                 end, Opts).
@@ -125,7 +124,8 @@ get_data_dir(Config) ->
                 "_inline_SUITE",
                 "_no_module_opt_SUITE",
                 "_no_type_opt_SUITE",
-                "_no_ssa_opt_SUITE"],
+                "_no_ssa_opt_SUITE",
+                "_cover_SUITE"],
     lists:foldl(fun(Suffix, Acc) ->
                         Opts = [{return,list}],
                         re:replace(Acc, Suffix, "_SUITE", Opts)
@@ -146,6 +146,7 @@ is_cloned_mod_1("_no_type_opt_SUITE") -> true;
 is_cloned_mod_1("_post_opt_SUITE") -> true;
 is_cloned_mod_1("_inline_SUITE") -> true;
 is_cloned_mod_1("_no_module_opt_SUITE") -> true;
+is_cloned_mod_1("_cover_SUITE") -> true;
 is_cloned_mod_1([_|T]) -> is_cloned_mod_1(T);
 is_cloned_mod_1([]) -> false.
 

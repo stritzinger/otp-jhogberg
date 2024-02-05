@@ -20,6 +20,7 @@
 
 %%
 -module(dbg_wx_trace).
+-moduledoc false.
 
 %% External exports
 -export([start/1, start/3, start/4]).
@@ -442,13 +443,13 @@ gui_cmd('Delete All', State) ->
     int:no_break(State#state.cm),
     State;
 gui_cmd({break, {Mod, Line}, What}, State) ->
-    case What of
-	add -> int:break(Mod, Line);
-	delete -> int:delete_break(Mod, Line);
-	{status, inactive} -> int:disable_break(Mod, Line);
-	{status, active} -> int:enable_break(Mod, Line);
-	{trigger, Action} -> int:action_at_break(Mod, Line, Action)
-    end,
+    _ = case What of
+            add -> int:break(Mod, Line);
+            delete -> int:delete_break(Mod, Line);
+            {status, inactive} -> int:disable_break(Mod, Line);
+            {status, active} -> int:enable_break(Mod, Line);
+            {trigger, Action} -> int:action_at_break(Mod, Line, Action)
+        end,
     State;
 
 %% Options menu

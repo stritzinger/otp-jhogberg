@@ -21,6 +21,15 @@
 %% names to calls to imported functions and BIFs.
 
 -module(erl_expand_records).
+-moduledoc """
+Expands records in a module.
+
+This module expands records in a module.
+
+## See Also
+
+Section [The Abstract Format](`e:erts:absform.md`) in ERTS User's Guide.
+""".
 
 -export([module/2]).
 
@@ -36,6 +45,11 @@
                  dialyzer=false % Cached value of compile flag 'dialyzer'
 		}).
 
+-doc """
+Expands all records in a module to use explicit tuple operations and adds
+explicit module names to calls to BIFs and imported functions. The returned
+module has no references to records, attributes, or code.
+""".
 -spec(module(AbsForms, CompileOptions) -> AbsForms2 when
       AbsForms :: [erl_parse:abstract_form()],
       AbsForms2 :: [erl_parse:abstract_form()],
@@ -452,7 +466,9 @@ expr({op,Anno,Op,L0,R0}, St0) ->
     {L,St1} = expr(L0, St0),
     {R,St2} = expr(R0, St1),
     {{op,Anno,Op,L,R},St2};
-expr(E={ssa_check_when,_,_,_,_,_}, St) ->
+expr({executable_line,_,_}=E, St) ->
+    {E, St};
+expr({ssa_check_when,_,_,_,_,_}=E, St) ->
     {E, St}.
 
 expr_list([E0 | Es0], St0) ->

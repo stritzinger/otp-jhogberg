@@ -270,31 +270,10 @@ extern Eterm erts_ddll_monitor_driver(Process *p,
 				      Eterm description,
 				      ErtsProcLocks plocks);
 
-/*
- * This structure represents one type of a binary in a process.
- */
-
-typedef struct proc_bin {
-    Eterm thing_word;		/* Subtag REFC_BINARY_SUBTAG. */
-    Uint size;			/* Binary size in bytes. */
-    struct erl_off_heap_header *next;
-    Binary *val;		/* Pointer to Binary structure. */
-    byte *bytes;		/* Pointer to the actual data bytes. */
-    Uint flags;			/* Flag word. */
-} ProcBin;
-
-#define PB_IS_WRITABLE 1	/* Writable (only one reference to ProcBin) */
-#define PB_ACTIVE_WRITER 2	/* There is an active writer */
-
-/*
- * ProcBin size in Eterm words.
- */
-#define PROC_BIN_SIZE (sizeof(ProcBin)/sizeof(Eterm))
-
 union erl_off_heap_ptr {
     struct erl_off_heap_header* hdr;
-    ProcBin *pb;
-    struct erl_fun_thing* fun;
+    BinRef *br;
+    struct erl_fun_ref* fref;
     struct external_thing_* ext;
     ErtsMRefThing *mref;
     Eterm* ep;
@@ -734,8 +713,8 @@ do {						\
 
 typedef struct ErtsPStack_ {
     byte* pstart;
-    int offs;   /* "stack pointer" as byte offset from pstart */
-    int size;   /* allocated size in bytes */
+    SWord offs;   /* "stack pointer" as byte offset from pstart */
+    SWord size;   /* allocated size in bytes */
     ErtsAlcType_t alloc_type;
 }ErtsPStack;
 
@@ -746,7 +725,7 @@ void erl_grow_pstack(ErtsPStack* s, void* default_pstack, unsigned need_bytes);
 #define PSTACK_DECLARE(s, DEF_PSTACK_SIZE) \
 PSTACK_TYPE PSTK_DEF_STACK(s)[DEF_PSTACK_SIZE];                            \
 ErtsPStack s = { (byte*)PSTK_DEF_STACK(s), /* pstart */                    \
-                 -(int)sizeof(PSTACK_TYPE), /* offs */                     \
+                 -(SWord)sizeof(PSTACK_TYPE), /* offs */                   \
                  DEF_PSTACK_SIZE*sizeof(PSTACK_TYPE), /* size */           \
                  ERTS_ALC_T_ESTACK   /* alloc_type */                      \
 }
@@ -913,14 +892,8 @@ ERTS_GLB_INLINE Eterm erts_equeue_get(ErtsEQueue *q) {
 
 /* binary.c */
 
-void erts_emasculate_writable_binary(ProcBin* pb);
-Eterm erts_new_heap_binary(Process *p, byte *buf, int len, byte** datap);
-Eterm erts_new_mso_binary(Process*, byte*, Uint);
-Eterm new_binary(Process*, const byte*, Uint);
-Eterm erts_heap_factory_new_binary(ErtsHeapFactory *hfact, byte *buf,
-                                   Uint len, Uint reserve_size);
-Eterm erts_realloc_binary(Eterm bin, size_t size);
-Eterm erts_build_proc_bin(ErlOffHeap*, Eterm*, Binary*);
+Eterm erts_shrink_binary_term(Eterm bin, size_t size);
+
 
 /* erl_bif_info.c */
 
@@ -1004,13 +977,14 @@ Eterm erts_module_for_prepared_code(Binary* magic);
  * or 0 if it does not. */
 Eterm erts_has_code_on_load(Binary* magic);
 
-Eterm erts_prepare_loading(Binary* loader_state,  Process *c_p,
-			   Eterm group_leader, Eterm* modp,
-			   byte* code, Uint size);
-Eterm erts_finish_loading(Binary* loader_state, Process* c_p,
-			  ErtsProcLocks c_p_locks, Eterm* modp);
+Eterm erts_prepare_loading(Binary *loader_state, Process *c_p,
+                           Eterm group_leader, Eterm *modp,
+                           const byte* code, Uint size);
+Eterm erts_finish_loading(Binary *loader_state, Process *c_p,
+                          ErtsProcLocks c_p_locks, Eterm *modp);
 Eterm erts_preload_module(Process *c_p, ErtsProcLocks c_p_locks,
-			  Eterm group_leader, Eterm* mod, byte* code, Uint size);
+                          Eterm group_leader, Eterm *mod,
+                          const byte *code, Uint size);
 void init_load(void);
 const ErtsCodeMFA* erts_find_function_from_pc(ErtsCodePtr pc);
 Eterm* erts_build_mfa_item(FunctionInfo* fi, Eterm* hp,
@@ -1030,6 +1004,12 @@ void erts_lookup_function_info(FunctionInfo* fi,
                                int full_info);
 extern ErtsLiteralArea** erts_dump_lit_areas;
 extern Uint erts_dump_num_lit_areas;
+
+/* export.c */
+
+/** @brief Iterates through the literal areas for canonical lambdas. This is
+ * destructive and can only be used for crash dumping. */
+ErtsLiteralArea *erts_get_next_lambda_lit_area(ErtsLiteralArea *prev);
 
 /* break.c */
 void init_break_handler(void);
@@ -1202,8 +1182,14 @@ extern int erts_do_net_exits(DistEntry*, Eterm);
 extern int distribution_info(fmtfn_t, void *);
 extern int is_node_name_atom(Eterm a);
 
-extern int erts_net_message(Port *, DistEntry *, Uint32 conn_id,
-			    byte *, ErlDrvSizeT, Binary *, byte *, ErlDrvSizeT);
+extern int erts_net_message(Port *prt,
+                            DistEntry *dep,
+                            Uint32 conn_id,
+                            byte *hbuf,
+                            ErlDrvSizeT hlen,
+                            Binary *bin,
+                            const byte *buf,
+                            ErlDrvSizeT len);
 
 int erts_dist_pend_spawn_exit_delete(ErtsMonitor *mon);
 int erts_dist_pend_spawn_exit_parent_setup(ErtsMonitor *mon);
@@ -1254,6 +1240,14 @@ extern int erts_no_line_info;
 extern Eterm erts_error_logger_warnings;
 extern int erts_initialized;
 extern int erts_compat_rel;
+
+#define ERTS_COV_NONE 0
+#define ERTS_COV_FUNCTION 1
+#define ERTS_COV_FUNCTION_COUNTERS 2
+#define ERTS_COV_LINE 3
+#define ERTS_COV_LINE_COUNTERS 4
+
+extern Uint erts_coverage_mode;
 
 #ifdef BEAMASM
 extern int erts_jit_asm_dump;
@@ -1468,10 +1462,12 @@ Sint erts_unicode_set_loop_limit(Sint limit);
 
 void erts_native_filename_put(Eterm ioterm, int encoding, byte *p) ;
 Sint erts_native_filename_need(Eterm ioterm, int encoding);
-void erts_copy_utf8_to_utf16_little(byte *target, byte *bytes, int num_chars);
-int erts_analyze_utf8(const byte *source, Uint size, 
-			const byte **err_pos, Uint *num_chars, int *left);
-int erts_analyze_utf8_x(const byte *source, Uint size, 
+void erts_copy_utf8_to_utf16_little(byte *target,
+                                    const byte *bytes,
+                                    Uint num_chars);
+int erts_analyze_utf8(const byte *source, Uint size,
+                      const byte **err_pos, Uint *num_chars, int *left);
+int erts_analyze_utf8_x(const byte *source, Uint size,
 			const byte **err_pos, Uint *num_chars, int *left,
 			Sint *num_latin1_chars, Uint max_chars);
 char *erts_convert_filename_to_native(Eterm name, char *statbuf, 
@@ -1486,7 +1482,7 @@ char *erts_convert_filename_to_encoding(Eterm name, char *statbuf,
 					int encoding,
 					Sint *used /* out */,
 					Uint extra);
-char* erts_convert_filename_to_wchar(byte* bytes, Uint size,
+char *erts_convert_filename_to_wchar(const byte* bytes, Uint size,
                                      char *statbuf, size_t statbuf_size,
                                      ErtsAlcType_t alloc_type, Sint* used,
                                      Uint extra_wchars);
@@ -1512,68 +1508,8 @@ Sint erts_unicode_list_to_buf_len(Eterm list);
 
 int Sint_to_buf(Sint num, int base, char **buf_p, size_t buf_size);
 
-#define ERTS_IOLIST_STATE_INITER(C_P, OBJ)	\
-    {(C_P), 0, 0, (OBJ), {NULL, NULL, NULL, ERTS_ALC_T_INVALID}, 0, 0}
-
-#define ERTS_IOLIST_STATE_MOVE(TO, FROM)	\
-    sys_memcpy((void *) (TO), (void *) (FROM), sizeof(ErtsIOListState))
-
-#define ERTS_IOLIST_SIZE_YIELDS_COUNT_PER_RED 8
-
-typedef struct {
-    Process *c_p;
-    ErlDrvSizeT size;
-    Uint offs;
-    Eterm obj;
-    ErtsEStack estack;
-    int reds_left;
-    int have_size;
-} ErtsIOListState;
-
-#define ERTS_IOLIST2BUF_STATE_INITER(C_P, OBJ)	\
-    {ERTS_IOLIST_STATE_INITER((C_P), (OBJ)), {NULL, 0, 0, 0}, NULL, 0, NULL, 0}
-
-#define ERTS_IOLIST2BUF_STATE_MOVE(TO, FROM)	\
-    sys_memcpy((void *) (TO), (void *) (FROM), sizeof(ErtsIOList2BufState))
-
-#define ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT 32
-#define ERTS_IOLIST_TO_BUF_YIELD_COUNT_PER_RED 8
-#define ERTS_IOLIST_TO_BUF_BYTES_PER_RED \
-    (ERTS_IOLIST_TO_BUF_YIELD_COUNT_PER_RED*ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT)
-
-typedef struct {
-    ErtsIOListState iolist;
-    struct {
-	byte *bptr;
-	size_t size;
-	Uint bitoffs;
-	Uint bitsize;
-    } bcopy;
-    char *buf;
-    ErlDrvSizeT len;
-    Eterm *objp;
-    int offset;
-} ErtsIOList2BufState;
-
-#define ERTS_IOLIST_OK 0
-#define ERTS_IOLIST_OVERFLOW 1
-#define ERTS_IOLIST_TYPE 2
-#define ERTS_IOLIST_YIELD 3
-
 Eterm buf_to_intlist(Eterm**, const char*, size_t, Eterm); /* most callers pass plain char*'s */
 
-#define ERTS_IOLIST_TO_BUF_OVERFLOW	(~((ErlDrvSizeT) 0))
-#define ERTS_IOLIST_TO_BUF_TYPE_ERROR	(~((ErlDrvSizeT) 1))
-#define ERTS_IOLIST_TO_BUF_YIELD	(~((ErlDrvSizeT) 2))
-#define ERTS_IOLIST_TO_BUF_FAILED(R) \
-    (((R) & (~((ErlDrvSizeT) 3))) == (~((ErlDrvSizeT) 3)))
-#define ERTS_IOLIST_TO_BUF_SUCCEEDED(R) \
-    (!ERTS_IOLIST_TO_BUF_FAILED((R)))
-
-ErlDrvSizeT erts_iolist_to_buf(Eterm, char*, ErlDrvSizeT);
-ErlDrvSizeT erts_iolist_to_buf_yielding(ErtsIOList2BufState *);
-int erts_iolist_size_yielding(ErtsIOListState *state);
-int erts_iolist_size(Eterm, ErlDrvSizeT *);
 Sint is_string(Eterm);
 void erl_at_exit(void (*) (void*), void*);
 Eterm collect_memory(Process *);
@@ -1584,6 +1520,7 @@ Eterm erts_unary_minus(Process* p, Eterm arg1);
 Eterm erts_mixed_plus(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_minus(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_times(Process* p, Eterm arg1, Eterm arg2);
+Eterm erts_mul_add(Process* p, Eterm arg1, Eterm arg2, Eterm arg3, Eterm* pp);
 Eterm erts_mixed_div(Process* p, Eterm arg1, Eterm arg2);
 
 int erts_int_div_rem(Process* p, Eterm arg1, Eterm arg2, Eterm *q, Eterm *r);

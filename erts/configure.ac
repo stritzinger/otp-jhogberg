@@ -390,7 +390,13 @@ AS_IF([test X"$with_spectre_mitigation" != X"no"],
     AC_COMPILE_IFELSE(
         [AC_LANG_PROGRAM([[]],[[return 0;]])],
         [AC_MSG_RESULT([yes])],
-        [AC_MSG_ERROR([no])])
+        [
+          CFLAGS="$CFLAGS -fcf-protection=none"
+          AC_COMPILE_IFELSE(
+            [AC_LANG_PROGRAM([[]],[[return 0;]])],
+            [AC_MSG_RESULT([yes])],
+            [AC_MSG_ERROR([no])])
+    ])
 
     AS_IF([test X"$with_spectre_mitigation" = X"incomplete"],
       [
@@ -453,23 +459,17 @@ if test -f doc/CONF_INFO; then
    rm -f doc/CONF_INFO
 fi
 
-AC_CHECK_PROGS(XSLTPROC, xsltproc)
-if test -z "$XSLTPROC"; then
-  echo "xsltproc" >> doc/CONF_INFO
-  AC_MSG_WARN([No 'xsltproc' command found: the documentation cannot be built])
+AC_CHECK_PROGS(EX_DOC, ex_doc)
+if test -z "$EX_DOC"; then
+  EX_DOC="$ERL_TOP/make/ex_doc_wrapper"
+  echo "ex_doc" >> doc/CONF_INFO
+  AC_MSG_WARN([No 'ex_doc' command found: the documentation cannot be built])
 fi
 
-AC_CHECK_PROGS(FOP, fop)
-if test -z "$FOP"; then
-  FOP="$ERL_TOP/make/fakefop"
-  echo "fop" >> doc/CONF_INFO
-  AC_MSG_WARN([No 'fop' command found: going to generate placeholder PDF files])
-fi
-
-AC_CHECK_PROGS(XMLLINT, xmllint)
-if test -z "$XMLLINT"; then
-  echo "xmllint" >> doc/CONF_INFO
-  AC_MSG_WARN([No 'xmllint' command found: can't run the xmllint target for the documentation])
+AC_CHECK_PROGS(ELIXIR, elixir)
+if test -z "$ELIXIR"; then
+  echo "elixir" >> doc/CONF_INFO
+  AC_MSG_WARN([No 'elixir' command found: can't run link checker for the documentation])
 fi
 
 dnl
@@ -1250,6 +1250,7 @@ AS_IF([test "x$with_termcap" != "xno" && test "X$host" != "Xwin32"],
   ])
 
 AC_SUBST(TERMCAP_LIB)
+AC_CHECK_HEADERS([termcap.h curses.h term.h])
 
 if test "x$TERMCAP_LIB" != "x"; then
 
@@ -2865,7 +2866,22 @@ AS_IF([test ${enable_jit} != no],
   [
    case "$ARCH" in
         amd64)
-           JIT_ARCH=x86
+           case "$OPSYS" in
+              darwin)
+                # MacOS Sonoma introduced some very annoying popups when
+                # dual-mapping memory through the documented APIs, and we did
+                # not wish to start using undocumented functionality in a patch
+                # release, so we have disabled the JIT on this platform.
+                #
+                # The ARM JIT is unaffected because it uses per-thread
+                # permissions instead of dual-mapped memory.
+                enable_jit=no
+                AC_MSG_WARN([JIT disabled due to lack to support on x86 Macs])
+                ;;
+              *)
+                JIT_ARCH=x86
+                ;;
+           esac
            ;;
         arm64)
            case "$OPSYS" in
@@ -2951,24 +2967,13 @@ AS_IF([test ${enable_jit} != no],
       # https://undeadly.org/cgi?action=article;sid=20180310000858
       enable_native_stack=no
     ],
-    [win32*],
     [
-      # Windows never messes with the stack, so it's safe by default.
+      # Windows never messes with the stack under any circumstances (and RSP
+      # can safely be used as a general-purpose register).
+      #
+      # On other platforms we'll wrangle sigaltstack(2) to let signals execute
+      # on an alternate stack.
       enable_native_stack=yes
-    ],
-    [
-      # Use the native stack if we can safely redirect OS signals to a
-      # different stack.
-      AC_MSG_CHECKING([for safe signal delivery])
-      AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <signal.h>]], [[#if defined(__APPLE__) && defined(__MACH__) && !defined(__DARWIN__)
-         #define __DARWIN__ 1
-         #endif
-         #if !(defined(__GLIBC__) || defined(__DARWIN__) || defined(__NetBSD__) || defined(__FreeBSD__) || defined(__sun__))
-         #error "Unknown libc. Assume musl, which does not allow safe signals"
-         #endif]])],[AC_MSG_RESULT([yes])
-         enable_native_stack=yes],[AC_MSG_RESULT([no, disabling native stack in JIT])
-         enable_native_stack=no
-      ])
     ])
 
   case "$JIT_ARCH" in

@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(beam_ssa_pp).
+-moduledoc false.
 
 -export([format_function/1,format_instr/1,format_var/1,format_type/1]).
 
@@ -214,13 +215,6 @@ format_var(Var, FuncAnno) ->
         [_|_]=Reg -> [Reg,$/,VarString]
     end.
 
-format_var_1(#b_var{name={Name,Uniq}}) ->
-    if
-        is_atom(Name) ->
-            io_lib:format("~ts:~p", [Name,Uniq]);
-        is_integer(Name) ->
-            io_lib:format("_~p:~p", [Name,Uniq])
-    end;
 format_var_1(#b_var{name=Name}) when is_atom(Name) ->
     atom_to_list(Name);
 format_var_1(#b_var{name=Name}) when is_integer(Name) ->
@@ -434,5 +428,5 @@ format_tuple_set(RecordSet) ->
                 " | ").
 
 format_tuple_set_1({{Arity,Key},#t_tuple{size=Arity,elements=Elems}=Tuple}) ->
-    Key = map_get(1, Elems), % Assertion
+    false = none =:= beam_types:meet(Key, map_get(1, Elems)), % Assertion
     format_type(Tuple).

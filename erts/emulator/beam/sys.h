@@ -21,8 +21,6 @@
 #ifndef __SYS_H__
 #define __SYS_H__
 
-#define ERTS_SUPPORT_OLD_RECV_MARK_INSTRS
-
 #if !defined(__GNUC__) || defined(__e2k__)
 #  define ERTS_AT_LEAST_GCC_VSN__(MAJ, MIN, PL) 0
 #elif !defined(__GNUC_MINOR__)
@@ -428,6 +426,7 @@ typedef long long          Sint  erts_align_attribute(sizeof(long long));
 typedef Uint UWord;
 typedef Sint SWord;
 #define ERTS_UINT_MAX ERTS_UWORD_MAX
+#define ERTS_SINT_MAX ERTS_SWORD_MAX
 
 typedef const void *ErtsCodePtr;
 typedef UWord BeamInstr;

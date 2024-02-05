@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(edlin_context).
+-moduledoc false.
 %% description
 %%
 -export([get_context/1, get_context/2, odd_quotes/2]).
@@ -65,6 +66,7 @@
                | {fun_, Mod, Fun} %% cursor is in a fun mod:fun statement
                | {new_fun, Unfinished}
                | {function}
+               | {function, Mod}
                | {function, Mod, Fun, Args, Unfinished, Nesting}
                | {map, Binding, Keys}
                | {map_or_record}
@@ -220,7 +222,8 @@ get_context([$:|Bef2], _) ->
     {Bef3, Mod} = edlin_expand:over_word(Bef2),
     case edlin_expand:over_word(Bef3) of
         {_, "fun"} -> {fun_, Mod};
-        _ -> {function}
+        _ when Mod =:= [] -> {function};
+        _ -> {function, Mod}
     end;
 get_context([$/|Bef1], _) ->
     {Bef2, Fun} = edlin_expand:over_word(Bef1),
@@ -556,7 +559,13 @@ over_fun_function(Bef, Acc) ->
     case edlin_expand:over_word(Bef) of
         {[$/|Bef1], Arity} -> over_fun_function(Bef1, [$/|Arity]++Acc);
         {[$:|Bef1], Fun} -> over_fun_function(Bef1, [$:|Fun]++Acc);
-        {" nuf"++Bef1, ModOrFun} -> over_fun_function(Bef1, "fun "++ModOrFun ++ Acc);
+        {" nuf"++Bef1, ModOrFun} ->
+            case to_atom(ModOrFun) of
+                {ok, _} ->
+                    over_fun_function(Bef1, "fun "++ModOrFun ++ Acc);
+                error ->
+                    {Bef,Acc}
+            end;
         _ -> {Bef,Acc}
     end.
 
@@ -656,3 +665,11 @@ is_binding(Word) ->
     nomatch =/= re:run(Normalized,
                        "^[_[:upper:]][[:alpha:]]*$",
                        [unicode, ucp]).
+
+to_atom(Str) ->
+    case erl_scan:string(Str) of
+        {ok, [{atom,_,A}], _} ->
+            {ok, A};
+        _ ->
+            error
+    end.

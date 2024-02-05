@@ -25,6 +25,7 @@
 	 bs_match_misc_SUITE/1, bs_match_int_SUITE/1,
 	 bs_match_tail_SUITE/1, bs_match_bin_SUITE/1,
 	 bs_construct_SUITE/1,
+         prompt_width/1,local_definitions_save_to_module_and_forget/1,
 	 refman_bit_syntax/1,
 	 progex_bit_syntax/1, progex_records/1,
 	 progex_lc/1, progex_funs/1,
@@ -77,6 +78,7 @@ suite() ->
 all() ->
     [forget, known_bugs, otp_5226, otp_5327,
      otp_5435, otp_5195, otp_5915, otp_5916,
+     prompt_width,local_definitions_save_to_module_and_forget,
      start_interactive, whereis, {group, bits},
      {group, refman}, {group, progex}, {group, tickets},
      {group, restricted}, {group, records}, {group, definitions}].
@@ -187,13 +189,14 @@ comm_err(<<"ugly().">>),
 comm_err(<<"1 - 2.">>),
 %% Make sure we test all local shell functions in a restricted shell.
 LocalFuncs = shell:local_func(),
-[] = lists:subtract(LocalFuncs, [v,h,b,f,fl,rd,rf,rl,rp,rr,history,results,catch_exception]),
+[] = lists:subtract(LocalFuncs, [v,h,b,f,fl,ff,lf,lr,lt,rd,rf,rl,rp,rr,tf,save_module,history,results,catch_exception]),
 
 LocalFuncs2 = [
     <<"A = 1.\nv(1).">>, <<"h().">>, <<"b().">>, <<"f().">>, <<"f(A).">>,
-    <<"fl()">>, <<"rd(foo,{bar}).">>, <<"rf().">>, <<"rf(foo).">>, <<"rl().">>, <<"rl(foo).">>, <<"rp([hej]).">>,
-    <<"rr(shell).">>, <<"rr(shell, shell_state).">>, <<"rr(shell,shell_state,[]).">>,
-    <<"history(20).">>, <<"results(20).">>, <<"catch_exception(0).">>],
+    <<"fl()">>, <<"ff()">>, <<"ff(my_func,1)">>, <<"lf()">>, <<"lr()">>, <<"lt()">>,
+    <<"rd(foo,{bar}).">>, <<"rf().">>, <<"rf(foo).">>, <<"rl().">>, <<"rl(foo).">>, <<"rp([hej]).">>,
+    <<"rr(shell).">>, <<"rr(shell, shell_state).">>, <<"rr(shell,shell_state,[]).">>, <<"tf()">>, <<"tf(hej)">>, 
+    <<"save_module(\"src/my_module.erl\")">>, <<"history(20).">>, <<"results(20).">>, <<"catch_exception(0).">>],
 lists:foreach(fun(LocalFunc) ->
         try
             ("exception exit: restricted shell does not allow"++_Rest) = Error = local_func_error_t(LocalFunc),
@@ -368,12 +371,19 @@ shell_attribute_test(Config) ->
     rtnode:run(
       [{putline, "foo(Bar) -> Bar."},
        {expect, "ok"},
-       {putline, "fl()."},
-       {expect, "\\Q{function,{shell_default,foo,1}}\\E"},
+       {putline, "lf()."},
+       {expect, ~S"foo\(Bar\) ->\s+Bar\."},
        {putline, "foo(1)."},
        {expect, "1"},
        {putline, "shell_default:foo(2)."},
-       {expect, "2"}
+       {expect, "2"},
+       {putline, "bar(Foo) -> Foo."},
+       {expect, "ok"},
+       {putline, "-spec bar(term()) -> term()."},
+       {putline, "lf()."},
+       {expect, ~S"\Q-spec bar(term()) -> term().\E"},
+       {expect, ~S"bar\(Foo\) ->\s+Foo\."},
+       {expect, ~S"foo\(Bar\) ->\s+Bar\."}
       ],[],"", ["-kernel","shell_history","enabled",
       "-kernel","shell_history_path","\"" ++ Path ++ "\"",
       "-kernel","shell_history_drop","[\"init:stop().\"]"]),
@@ -392,8 +402,9 @@ shell_attribute_test(Config) ->
     rtnode:run(
         [{putline, "-spec foo(Bar) -> Bar when Bar :: integer()."},
          {expect, "ok"},
-         {putline, "fl()."},
-         {expect, "\\Q{function_type,{shell_default,foo,1}}\\E"}
+         {putline, "lf()."},
+         {expect, "\\Q-spec foo(Bar) -> Bar when Bar :: integer().\\E"},
+         {expect, "\\Q%% foo/1 not implemented\\E"}
         ],[],"", ["-kernel","shell_history","enabled",
         "-kernel","shell_history_path","\"" ++ Path ++ "\"",
         "-kernel","shell_history_drop","[\"init:stop().\"]"]),
@@ -401,11 +412,35 @@ shell_attribute_test(Config) ->
     rtnode:run(
         [{putline, "-type my_type() :: boolean() | integer()."},
          {expect, "ok"},
-         {putline, "fl()."},
-         {expect, "\\Q{type,my_type}\\E"}
+         {putline, "lt()."},
+         {expect, "\\Q-type my_type() :: boolean() | integer().\\E"},
+         {putline, "-type my_other_type() :: boolean() | integer()."},
+         {expect, "ok"},
+         {putline, "lt()."},
+         {expect, "\\Q-type my_other_type() :: boolean() | integer().\\E"},
+         {expect, "\\Q-type my_type() :: boolean() | integer().\\E"}
         ],[],"", ["-kernel","shell_history","enabled",
         "-kernel","shell_history_path","\"" ++ Path ++ "\"",
         "-kernel","shell_history_drop","[\"init:stop().\"]"]),
+    ok.
+
+prompt_width(Config) when is_list(Config) ->
+    5 = shell:prompt_width("olá> ", unicode),
+    5 = shell:prompt_width("\e[31molá> ", unicode),
+    5 = shell:prompt_width(<<"\e[31molá> "/utf8>>, unicode),
+    8 = shell:prompt_width("olá> ", latin1),
+    4 = shell:prompt_width("😀> ", unicode),
+    11 = shell:prompt_width("😀> ", latin1),
+    case proplists:get_value(encoding, io:getopts(user)) of
+        unicode ->
+            5 = shell:prompt_width("olá> "),
+            5 = shell:prompt_width("\e[31molá> "),
+            5 = shell:prompt_width(<<"\e[31molá> "/utf8>>),
+            4 = shell:prompt_width("😀> ");
+        latin1 ->
+            8 = shell:prompt_width("olá> "),
+            11 = shell:prompt_width("😀> ")
+    end,
     ok.
 
 %% Test of the record support. OTP-5063.
@@ -640,6 +675,92 @@ typed_records(Config) when is_list(Config) ->
     [ok] = scan(RR7),
 
     file:delete(Test),
+    ok.
+
+local_definitions_save_to_module_and_forget(Config) when is_list(Config) ->
+    %% extra dot on the empty line is a consequence of dotify
+    "ok.\n-type hej() :: integer().\n.\nok.\n" = t(
+      <<"-type hej() :: integer().\n"
+        "lt().">>),
+    "ok.\n-record(svej,{a}).\n.\nok.\n" = t(
+      <<"-record(svej, {a}).\n"
+        "lr().">>),
+    "ok.\nok.\n-spec my_func(X) -> X.\nmy_func(X) ->\n    X.\n.\nok.\n" = t(
+      <<"-spec my_func(X) -> X.\n"
+        "my_func(X) -> X.\n"
+        "lf().">>),
+    %% Save local definitions to a module
+    U = unicode:characters_to_binary("😊"),
+    "ok.\nok.\nok.\nok.\nok.\nok.\n{ok,'MY_MODULE'}.\n" = t({
+      <<"-type hej() :: integer().\n"
+        "-record(svej, {a :: hej()}).\n"
+        "my_func(#svej{a=A}) -> A.\n"
+        "-spec not_implemented(X) -> X.\n"
+        "-spec 'my_func",U/binary,"'(X) -> X.\n"
+        "'my_func",U/binary,"'(#svej{a=A}) -> A.\n"
+        "save_module(\"MY_MODULE.erl\").">>, unicode}),
+    %% Read back the newly created module
+    {ok,<<"-module('MY_MODULE').\n\n"
+          "-export([my_func/1,'my_func",240,159,152,138,"'/1]).\n\n"
+          "-type hej() :: integer().\n"
+          "-record(svej,{a :: hej()}).\n"
+          "my_func(#svej{a = A}) ->\n"
+          "    A.\n\n"
+          "-spec 'my_func",240,159,152,138,"'(X) -> X.\n"
+          "'my_func",240,159,152,138,"'(#svej{a = A}) ->\n"
+          "    A.\n">>} = file:read_file("MY_MODULE.erl"),
+    file:delete("MY_MODULE.erl"),
+
+    %% Forget one locally defined type
+    "ok.\nok.\nok.\n-type svej() :: integer().\n.\nok.\n" = t(
+      <<"-type hej() :: integer().\n"
+        "-type svej() :: integer().\n"
+        "tf(hej).\n"
+        "lt().">>),
+    %% Forget one locally defined record
+    "ok.\nok.\nok.\n-record(hej,{a}).\n.\nok.\n" = t(
+      <<"-record(hej, {a}).\n"
+        "-record(svej, {a}).\n"
+        "rf(svej).\n"
+        "lr().">>),
+    %% Forget one locally defined function
+    "ok.\nok.\nok.\nok.\nok.\n-spec my_func2(X) -> X.\nmy_func2(X) ->\n    X.\n.\nok.\n" = t(
+      <<"-spec my_func(X) -> X.\n"
+        "my_func(X) -> X.\n"
+        "-spec my_func2(X) -> X.\n"
+        "my_func2(X) -> X.\n"
+        "ff(my_func,1).\n"
+        "lf().">>),
+    %% Forget all locally defined types
+    "ok.\nok.\nok.\n.\nok.\n" = t(
+      <<"-type hej() :: integer().\n"
+        "-type svej() :: integer().\n"
+        "tf().\n"
+        "lt().">>),
+    %% Forget all locally defined records
+    "ok.\nok.\n[]\n.\nok.\n" = t(
+      <<"-record(hej, {a}).\n"
+        "-record(svej, {a}).\n"
+        "rf().\n"
+        "lr().">>),
+    %% Forget all locally defined functions
+    "ok.\nok.\nok.\nok.\nok.\n\n.\nok.\n" = t(
+      <<"-spec my_func(X) -> X.\n"
+        "my_func(X) -> X.\n"
+        "-spec my_func2(X) -> X.\n"
+        "my_func2(X) -> X.\n"
+        "ff().\n"
+        "lf().">>),
+    %% Forget all local definitions
+    "ok.\nok.\nok.\nok.\nok.\n\n.\nok.\n.\nok.\n.\nok.\n" = t(
+      <<"-type hej() :: integer().\n"
+        "-record(svej, {a}).\n "
+        "-spec my_func(X) -> X.\n"
+        "my_func(X) -> X.\n"
+        "fl().\n"
+        "lf().\n"
+        "lt().\n"
+        "lr().\n">>),
     ok.
 
 %% Known bugs.

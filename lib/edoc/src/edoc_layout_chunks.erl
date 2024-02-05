@@ -135,7 +135,6 @@ edoc_to_chunk(Doc, Opts) ->
       Opts :: proplists:proplist().
 doc_contents(XPath, Doc, Opts) ->
     case doc_visibility(XPath, Doc, Opts) of
-	none -> none;
 	hidden -> hidden;
 	show -> doc_contents_(XPath, Doc, Opts)
     end.
@@ -152,9 +151,9 @@ doc_visibility(_XPath, Doc, Opts) ->
 	%% EDoc `@private' maps to EEP-48 `hidden'
 	{<<"yes">>, _, _} ->
 	    hidden;
-	%% EDoc `@hidden' is EEP-48 `none'
+	%% EDoc `@hidden' is EEP-48 `hidden'
 	{_, _, <<"yes">>} ->
-	    none;
+	    hidden;
 	_ ->
 	    show
     end.
@@ -480,7 +479,9 @@ xpath_to_text(XPath, Doc, Opts) ->
 	[] -> <<>>;
 	[#xmlAttribute{} = Attr] ->
 	    {_ , Value} = format_attribute(Attr),
-	    hd(shell_docs:normalize([Value]));
+            case shell_docs:normalize([Value]) of
+                [{p,[],[Normal]}] -> Normal
+            end;
 	[#xmlElement{}] = Elements ->
 	    xmerl_to_binary(Elements, Opts);
 	[_|_] ->
@@ -547,7 +548,9 @@ format_element(#xmlElement{} = E, Opts) ->
 	    format_content(Content, Opts);
 	{_, false} ->
 	    edoc_report:warning(0, source_file(Opts), "'~s' is not allowed - skipping tag, extracting content", [Name]),
-	    format_content(Content, Opts);
+            [<<"<",(atom_to_binary(Name))/binary,">">>,
+             format_content(Content, Opts),
+             <<"</",(atom_to_binary(Name))/binary,">">>];
 	_ ->
 	    [{Name, format_attributes(Attributes), format_content(Content, Opts)}]
     end.

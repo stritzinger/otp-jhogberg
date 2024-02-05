@@ -53,6 +53,7 @@
 #include "erl_proc_sig_queue.h"
 #include "beam_load.h"
 #include "erl_global_literals.h"
+#include "erl_iolist.h"
 
 #include "jit/beam_asm.h"
 
@@ -65,68 +66,6 @@
 #define ERTS_DEFAULT_SCHED_STACK_SIZE   128
 #define ERTS_DEFAULT_DCPU_SCHED_STACK_SIZE 40
 #define ERTS_DEFAULT_DIO_SCHED_STACK_SIZE 40
-
-/*
- * The variables below (prefixed with etp_) are for erts/etc/unix/etp-commands
- * only. Do not remove even though they aren't used elsewhere in the emulator!
- */
-const int etp_smp_compiled = 1;
-const int etp_thread_compiled = 1;
-const char etp_erts_version[] = ERLANG_VERSION;
-const char etp_otp_release[] = ERLANG_OTP_RELEASE;
-const char etp_arch[] = ERLANG_ARCHITECTURE;
-#if ERTS_ENABLE_KERNEL_POLL
-const int erts_use_kernel_poll = 1;
-const int etp_kernel_poll_support = 1;
-#else
-const int erts_use_kernel_poll = 0;
-const int etp_kernel_poll_support = 0;
-#endif
-#if defined(ARCH_64)
-const int etp_arch_bits = 64;
-#elif defined(ARCH_32)
-const int etp_arch_bits = 32;
-#else
-# error "Not 64-bit, nor 32-bit arch"
-#endif
-#ifdef BEAMASM
-const int etp_beamasm = 1;
-#else
-const int etp_beamasm = 0;
-#endif
-#ifdef DEBUG
-const int etp_debug_compiled = 1;
-#else
-const int etp_debug_compiled = 0;
-#endif
-#ifdef ERTS_ENABLE_LOCK_COUNT
-const int etp_lock_count = 1;
-#else
-const int etp_lock_count = 0;
-#endif
-#ifdef ERTS_ENABLE_LOCK_CHECK
-const int etp_lock_check = 1;
-#else
-const int etp_lock_check = 0;
-#endif
-const int etp_endianness = ERTS_ENDIANNESS;
-const Eterm etp_ref_header = ERTS_REF_THING_HEADER;
-#ifdef ERTS_MAGIC_REF_THING_HEADER
-const Eterm etp_magic_ref_header = ERTS_MAGIC_REF_THING_HEADER;
-#else
-const Eterm etp_magic_ref_header = ERTS_REF_THING_HEADER;
-#endif
-const Eterm etp_the_non_value = THE_NON_VALUE;
-#ifdef TAG_LITERAL_PTR
-const Eterm etp_ptr_mask = (~(Eterm)7);
-#else
-const Eterm etp_ptr_mask = (~(Eterm)3);
-#endif
-#ifdef ERTS_HOLE_MARKER
-const Eterm etp_hole_marker = ERTS_HOLE_MARKER;
-#else
-const Eterm etp_hole_marker = 0;
-#endif
 
 static int modified_sched_thread_suggested_stack_size = 0;
 
@@ -199,6 +138,7 @@ int erts_no_crash_dump = 0;	/* Use -d to suppress crash dump. */
 int erts_no_line_info = 0;	/* -L: Don't load line information */
 
 #ifdef BEAMASM
+Uint erts_coverage_mode = ERTS_COV_NONE; /* -JPcover: Enable coverage */
 int erts_jit_asm_dump = 0;	/* -JDdump: Dump assembly code */
 #endif
 
@@ -343,7 +283,6 @@ erl_init(int ncpu,
     BIN_VH_MIN_SIZE = erts_next_heap_size(BIN_VH_MIN_SIZE, 0);
 
     erts_init_trace();
-    erts_init_bits();
     erts_code_ix_init();
     erts_init_fun_table();
     init_atom_table();
@@ -359,6 +298,7 @@ erl_init(int ncpu,
     init_emulator();
     erts_ptab_init(); /* Must be after init_emulator() */
     erts_init_binary(); /* Must be after init_emulator() */
+    erts_init_iolist(); /* Must be after init_emulator() */
     erts_bp_init();
     init_db(db_spin_count); /* Must be after init_emulator */
     erts_init_node_tables(node_tab_delete_delay);
@@ -434,9 +374,14 @@ erl_first_process_otp(char* mod_name, int argc, char** argv)
     hp = HAlloc(&parent, argc*2 + 4);
     args = NIL;
     for (i = argc-1; i >= 0; i--) {
-	int len = sys_strlen(argv[i]);
-	args = CONS(hp, new_binary(&parent, (byte*)argv[i], len), args);
-	hp += 2;
+        size_t len = sys_strlen(argv[i]);
+
+        args = CONS(hp,
+                    erts_new_binary_from_data(&parent,
+                                              len,
+                                              (byte*)argv[i]),
+                    args);
+        hp += 2;
     }
     boot_mod = erts_atom_put((byte *) mod_name, sys_strlen(mod_name),
                              ERTS_ATOM_ENC_LATIN1, 1);
@@ -653,6 +598,7 @@ void erts_usage(void)
 
 #ifdef BEAMASM
     erts_fprintf(stderr, "-JDdump bool   enable or disable dumping of generated assembly code for each module loaded\n");
+    erts_fprintf(stderr, "-JPcover true|false|line|line_counters|function|function_counters  enable or disable instrumentation for coverage\n");
     erts_fprintf(stderr, "-JPperf true|false|dump|map|fp|no_fp   enable or disable support for perf on Linux\n");
     erts_fprintf(stderr, "-JMsingle bool enable the use of single-mapped RWX memory for JIT:ed code\n");
     erts_fprintf(stderr, "\n");
@@ -1767,6 +1713,24 @@ erl_start(int argc, char **argv)
                 erts_fprintf(stderr, "+JPperf is not supported on this platform\n");
                 erts_usage();
 #endif
+                } else if (has_prefix("cover", sub_param)) {
+                    arg = get_arg(sub_param+5, argv[i + 1], &i);
+                    if (sys_strcmp(arg, "true") == 0) {
+                        erts_coverage_mode = ERTS_COV_LINE_COUNTERS;
+                    } else if (sys_strcmp(arg, "false") == 0) {
+                        erts_coverage_mode = ERTS_COV_NONE;
+                    } else if (sys_strcmp(arg, "function") == 0) {
+                        erts_coverage_mode = ERTS_COV_FUNCTION;
+                    } else if (sys_strcmp(arg, "function_counters") == 0) {
+                        erts_coverage_mode = ERTS_COV_FUNCTION_COUNTERS;
+                    } else if (sys_strcmp(arg, "line") == 0) {
+                        erts_coverage_mode = ERTS_COV_LINE;
+                    } else if (sys_strcmp(arg, "line_counters") == 0) {
+                        erts_coverage_mode = ERTS_COV_LINE_COUNTERS;
+                    } else {
+                        erts_fprintf(stderr, "bad +JPcover flag %s\n", arg);
+                        erts_usage();
+                    }
                 }
                 break;
             case 'M':
@@ -2253,7 +2217,7 @@ erl_start(int argc, char **argv)
 	    /* suggested stack size (Kilo Words) for threads in thread pool */
 	    arg = get_arg(argv[i]+2, argv[i+1], &i);
 	    erts_async_thread_suggested_stack_size = atoi(arg);
-	    
+
 	    if ((erts_async_thread_suggested_stack_size
 		 < ERTS_ASYNC_THREAD_MIN_STACK_SIZE)
 		|| (erts_async_thread_suggested_stack_size >
@@ -2517,7 +2481,7 @@ erl_start(int argc, char **argv)
 	    = (Process *) erts_ptab_pix2intptr_ddrb(&erts_proc,
 						    internal_pid_index(pid));
 	ASSERT(erts_code_purger && erts_code_purger->common.id == pid);
-	erts_proc_inc_refc(erts_code_purger); 
+	erts_proc_inc_refc(erts_code_purger);
 
 	pid = erl_system_process_otp(erts_init_process_id,
                                      "erts_literal_area_collector",

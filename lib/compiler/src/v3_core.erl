@@ -78,6 +78,7 @@
 %% fun is not a safe
 
 -module(v3_core).
+-moduledoc false.
 
 -export([module/2,format_error/1]).
 
@@ -854,12 +855,8 @@ expr({'catch',L,E0}, St0) ->
     Lanno = lineno_anno(L, St1),
     {#icatch{anno=#a{anno=Lanno},body=Eps ++ [E1]},[],St1};
 expr({'fun',L,{function,F,A}}, St0) ->
-    %% Generate a new name for eta conversion of local funs (`fun local/123`)
-    %% in case `no_shared_fun_wrappers` is given.
-    {Fname,St1} = new_fun_name(St0),
-    Lanno = full_anno(L, St1),
-    Id = {0,0,Fname},
-    {#c_var{anno=Lanno++[{id,Id}],name={F,A}},[],St1};
+    Lanno = full_anno(L, St0),
+    {#c_var{anno=Lanno,name={F,A}},[],St0};
 expr({'fun',L,{function,M,F,A}}, St0) ->
     {As,Aps,St1} = safe_list([M,F,A], St0),
     Lanno = full_anno(L, St1),
@@ -980,6 +977,10 @@ expr({op,L,Op,L0,R0}, St0) ->
     {#icall{anno=#a{anno=LineAnno},		%Must have an #a{}
 	    module=#c_literal{anno=LineAnno,val=erlang},
 	    name=#c_literal{anno=LineAnno,val=Op},args=As},Aps,St1};
+expr({executable_line,L,_}, St0) ->
+    {#iprimop{anno=#a{anno=lineno_anno(L, St0)},
+              name=#c_literal{val=executable_line},
+              args=[]},[],St0};
 expr({ssa_check_when,L,WantedResult,Args,Tag,Clauses}, St) ->
     {#c_opaque{anno=full_anno(L, St),val={ssa_check_when,WantedResult,Tag,Args,Clauses}}, [], St}.
 

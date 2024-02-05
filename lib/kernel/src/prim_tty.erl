@@ -17,6 +17,7 @@
 %% %CopyrightEnd%
 %%
 -module(prim_tty).
+-moduledoc false.
 
 %% Todo:
 %%  * Try to move buffer handling logic to Erlang
@@ -105,8 +106,9 @@
 %%        to previous line automatically.
 
 -export([init/1, reinit/2, isatty/1, handles/1, unicode/1, unicode/2,
-         handle_signal/2, window_size/1, handle_request/2, write/2, write/3, npwcwidth/1,
-         npwcwidthstring/1]).
+         handle_signal/2, window_size/1, handle_request/2, write/2, write/3,
+         npwcwidth/1, npwcwidth/2,
+         ansi_regexp/0, ansi_color/2]).
 -export([reader_stop/1, disable_reader/1, enable_reader/1]).
 
 -nifs([isatty/1, tty_create/0, tty_init/3, tty_set/1, setlocale/1,
@@ -143,6 +145,8 @@
                 buffer_before = [],  %% Current line before cursor in reverse
                 buffer_after = [],   %% Current line after  cursor not in reverse
                 buffer_expand,       %% Characters in expand buffer
+                buffer_expand_row = 1,
+                buffer_expand_limit = 0 :: non_neg_integer(),
                 cols = 80,
                 rows = 24,
                 xn = false,
@@ -170,8 +174,7 @@
 -type request() ::
         {putc_raw, binary()} |
         {putc, unicode:unicode_binary()} |
-        {expand, unicode:unicode_binary()} |
-        {expand_with_trim, unicode:unicode_binary()} |
+        {expand, unicode:unicode_binary(), integer()} |
         {insert, unicode:unicode_binary()} |
         {insert_over, unicode:unicode_binary()} |
         {delete, integer()} |
@@ -184,11 +187,42 @@
         {move, integer()} |
         {move_line, integer()} |
         {move_combo, integer(), integer(), integer()} |
+        {move_expand, -32768..32767} |
         clear |
         beep.
 -type tty() :: reference().
 -opaque state() :: #state{}.
 -export_type([state/0]).
+
+-spec ansi_regexp() -> binary().
+ansi_regexp() ->
+    ?ANSI_REGEXP.
+
+ansi_fg_color(Color) ->
+    case Color of
+        black -> 30;
+        red -> 31;
+        green -> 32;
+        yellow -> 33;
+        blue -> 34;
+        magenta -> 35;
+        cyan -> 36;
+        white -> 37;
+        bright_black -> 90;
+        bright_red -> 91;
+        bright_green -> 92;
+        bright_yellow -> 93;
+        bright_blue -> 94;
+        bright_magenta -> 95;
+        bright_cyan -> 96;
+        bright_white -> 97
+    end.
+ansi_bg_color(Color) ->
+    ansi_fg_color(Color) + 10.
+
+-spec ansi_color(BgColor :: atom(), FgColor :: atom()) -> iolist().
+ansi_color(BgColor, FgColor) ->
+    io_lib:format("\e[~w;~wm", [ansi_bg_color(BgColor), ansi_fg_color(FgColor)]).
 
 -spec on_load() -> ok.
 on_load() ->
@@ -593,7 +627,7 @@ handle_request(State, redraw_prompt) ->
     {ClearLine, _} = handle_request(State, delete_line),
     {Redraw, NewState} = handle_request(State, redraw_prompt_pre_deleted),
     {[ClearLine, Redraw], NewState};
-handle_request(State = #state{unicode = U, cols = W}, redraw_prompt_pre_deleted) ->
+handle_request(State = #state{unicode = U, cols = W, rows = R}, redraw_prompt_pre_deleted) ->
     {Movement, TextInView, EverythingFitsInView} = in_view(State),
     {_, NewPrompt} = handle_request(State, new_prompt),
     {Redraw, RedrawState} = insert_buf(NewPrompt, unicode:characters_to_binary(TextInView)),
@@ -607,17 +641,73 @@ handle_request(State = #state{unicode = U, cols = W}, redraw_prompt_pre_deleted)
                             true when Last =/= [] -> cols(Last, U);
                             _ -> cols(State#state.buffer_before, U) + cols(State#state.buffer_after,U)
                           end,
-                          {ExpandBuffer, NewState} = insert_buf(RedrawState#state{ buffer_expand = [] }, iolist_to_binary(BufferExpand)),
+                          ERow = State#state.buffer_expand_row,
+                            BufferExpandLines = string:split(BufferExpand, "\n", all),
+                            InputRows = (cols_multiline([State#state.buffer_before ++ State#state.buffer_after], W, U) div W),
+                            ExpandRows = (cols_multiline(BufferExpandLines, W, U) div W),
+                            ExpandRowsLimit = case State#state.buffer_expand_limit of
+                                0 ->
+                                     ExpandRows;
+                                Limit ->
+                                    min(Limit, ExpandRows)
+                            end,
+                            ExpandRowsLimit1 = min(ExpandRowsLimit, R-1-InputRows),
+                            BufferExpand1 = case ExpandRows > ExpandRowsLimit1 of
+                                true ->
+                                        Color = lists:flatten(ansi_color(cyan, bright_white)),
+                                        StatusLine = io_lib:format(Color ++"\e[1m" ++ "rows ~w to ~w of ~w" ++ "\e[0m",
+                                                                   [ERow, (ERow-1) + ExpandRowsLimit1, ExpandRows]),
+                                        Cols1 = max(0,W*ExpandRowsLimit1),
+                                        Cols0 = max(0,W*(ERow-1)),
+                                        {_, _, BufferExpandLinesInViewStart, {_, BEStartIVHalf}} = split_cols_multiline(Cols0, BufferExpandLines, U, W),
+                                        {_, BufferExpandLinesInViewRev, _, {BEIVHalf, _}} = split_cols_multiline(Cols1, BufferExpandLinesInViewStart++[BEStartIVHalf], U, W),
+                                        BEIVHalf1 = case BEIVHalf of [] -> [];
+                                            _ -> [BEIVHalf]
+                                        end,
+                                        ExpandInView = lists:reverse(BEIVHalf1++BufferExpandLinesInViewRev),
+                                        ["\r\n",lists:join("\n", ExpandInView ++ [StatusLine])];
+                                false ->
+                                    ["\r\n",BufferExpand]
+                                end,
+                          {ExpandBuffer, NewState} = insert_buf(RedrawState#state{ buffer_expand = [] }, unicode:characters_to_binary(BufferExpand1)),
                           BECols = cols(W, End, NewState#state.buffer_expand, U),
                           MoveToEnd = move_cursor(RedrawState, BECols, End),
                           {[encode(Redraw,U),encode(ExpandBuffer, U), MoveToEnd, Movement], RedrawState}
                   end,
     {Output, State};
+handle_request(State = #state{ buffer_expand = Expand, buffer_expand_row = ERow, cols = W, rows = R, unicode = U}, {move_expand, N}) ->
+    %% Get number of Lines in terminal window
+    BufferExpandLines = case Expand of
+        undefined -> [];
+        _ -> string:split(Expand, "\n", all)
+    end,
+    ExpandRows = (cols_multiline(BufferExpandLines, W, U) div W),
+    InputRows = (cols_multiline([State#state.buffer_before ++ State#state.buffer_after], W, U) div W),
+    ExpandRowsLimit = case State#state.buffer_expand_limit of
+        0 ->
+             ExpandRows;
+        Limit ->
+            min(Limit, ExpandRows)
+    end,
+    ExpandRowsLimit1 = min(ExpandRowsLimit, R-1-InputRows),
+    ERow1 = if ExpandRows > ExpandRowsLimit1 -> %% We need to page expand rows
+        min(ExpandRows-ExpandRowsLimit1+1,max(1,ERow + N));
+        true -> 1 %% No need to page expand rows
+    end,
+    handle_request(State#state{buffer_expand_row = ERow1}, redraw_prompt);
+handle_request(State = #state{unicode = U, cols = W, buffer_before = Bef,
+                              lines_before = LinesBefore}, delete_line) ->
+    MoveToBeg = move_cursor(State, cols_multiline(Bef, LinesBefore, W, U), 0),
+    {[MoveToBeg, State#state.delete_after_cursor],
+     State#state{buffer_before = [],
+                 buffer_after = [],
+                 lines_before = [],
+                 lines_after = []}};
 %% Clear the expand buffer after the cursor when we handle any request.
 handle_request(State = #state{ buffer_expand = Expand, unicode = U}, Request)
   when Expand =/= undefined ->
-    {Redraw, NoExpandState} = handle_request(State#state{ buffer_expand = undefined }, redraw_prompt),
-    {Output, NewState} = handle_request(NoExpandState#state{ buffer_expand = undefined }, Request),
+    {Redraw, NoExpandState} = handle_request(State#state{ buffer_expand = undefined, buffer_expand_row = 1 }, redraw_prompt),
+    {Output, NewState} = handle_request(NoExpandState#state{ buffer_expand = undefined, buffer_expand_row = 1 }, Request),
     {[encode(Redraw, U), encode(Output, U)], NewState};
 handle_request(State, new_prompt) ->
     {"", State#state{buffer_before = [],
@@ -625,11 +715,9 @@ handle_request(State, new_prompt) ->
                      lines_before = [],
                      lines_after = []}};
 %% Print characters in the expandbuffer after the cursor
-handle_request(State, {expand, Expand}) ->
-    handle_request(State#state{buffer_expand = Expand}, redraw_prompt);
-handle_request(State, {expand_with_trim, Binary}) ->
-    handle_request(State, 
-                   {expand, iolist_to_binary(["\r\n",string:trim(Binary, both)])});
+handle_request(State, {expand, Expand, N}) ->
+    {_, NewState} = insert_buf(State#state{buffer_expand = []}, Expand),
+    handle_request(NewState#state{buffer_expand_limit = N}, redraw_prompt);
 %% putc prints Binary and overwrites any existing characters
 handle_request(State = #state{ unicode = U }, {putc, Binary}) ->
     %% Todo should handle invalid unicode?
@@ -648,17 +736,6 @@ handle_request(State = #state{ unicode = U }, {putc, Binary}) ->
 handle_request(State = #state{}, delete_after_cursor) ->
     {[State#state.delete_after_cursor],
      State#state{buffer_after = [],
-                 lines_after = []}};
-handle_request(State = #state{buffer_before = [], buffer_after = [],
-                              lines_before = [], lines_after = []}, delete_line) ->
-    {[],State};
-handle_request(State = #state{unicode = U, cols = W, buffer_before = Bef,
-                              lines_before = LinesBefore}, delete_line) ->
-    MoveToBeg = move_cursor(State, cols_multiline(Bef, LinesBefore, W, U), 0),
-    {[MoveToBeg, State#state.delete_after_cursor],
-     State#state{buffer_before = [],
-                 buffer_after = [],
-                 lines_before = [],
                  lines_after = []}};
 handle_request(State = #state{ unicode = U, cols = W }, {delete, N}) when N > 0 ->
     {_DelNum, DelCols, _, NewBA} = split(N, State#state.buffer_after, U),
@@ -906,18 +983,23 @@ move(left, #state{ left = Left }, N) ->
 move(right, #state{ right = Right }, N) ->
     lists:duplicate(N, Right).
 
-in_view(#state{lines_after = LinesAfter, buffer_before = Bef, buffer_after = Aft, lines_before = LinesBefore, rows=R, cols=W, unicode=U, buffer_expand = BufferExpand} = State) ->
+in_view(#state{lines_after = LinesAfter, buffer_before = Bef, buffer_after = Aft, lines_before = LinesBefore,
+               rows=R, cols=W, unicode=U, buffer_expand = BufferExpand, buffer_expand_limit = BufferExpandLimit} = State) ->
     BufferExpandLines = case BufferExpand of
                             undefined -> [];
-                            _ -> string:split(erlang:binary_to_list(BufferExpand), "\r\n", all)
+                            _ -> string:split(unicode:characters_to_list(BufferExpand), "\r\n", all)
                         end,
-    ExpandRows = (cols_multiline(BufferExpandLines, W, U) div W),
+    ExpandLimit = case BufferExpandLimit of
+                        0 -> cols_multiline(BufferExpandLines, W, U) div W;
+                        _ -> min(cols_multiline(BufferExpandLines, W, U) div W, BufferExpandLimit)
+                    end,
+    ExpandRows = ExpandLimit,
     InputBeforeRows = (cols_multiline(LinesBefore, W, U) div W),
     InputRows = (cols_multiline([Bef ++ Aft], W, U) div W),
     InputAfterRows = (cols_multiline(LinesAfter, W, U) div W),
     %% Dont print lines after if we have expansion rows
     SumRows = InputBeforeRows+ InputRows + ExpandRows + InputAfterRows,
-    if SumRows > R -> 
+    if SumRows > R ->
             RowsLeftAfterInputRows = R - InputRows,
             RowsLeftAfterExpandRows = RowsLeftAfterInputRows - ExpandRows,
             RowsLeftAfterInputBeforeRows = RowsLeftAfterExpandRows - InputBeforeRows,
@@ -988,40 +1070,31 @@ cols([SkipSeq | T], Unicode) when is_binary(SkipSeq) ->
     %% so we skip that
     cols(T, Unicode).
 
-cols(ColsPerLine, CurrCols, Chars, Unicode) when CurrCols > ColsPerLine ->
-    ColsPerLine + cols(ColsPerLine, CurrCols - ColsPerLine, Chars, Unicode);
-cols(_ColsPerLine, CurrCols, [], _Unicode) ->
+%% If we call cols with a CurrCols that is higher than ColsPerLine,
+%% we add that many cols to the total before calculating more cols.
+cols(ColsPerLine, CurrCols, Chars, Unicode) when CurrCols >= ColsPerLine ->
+    ColsPerLine * ((CurrCols + 1) div ColsPerLine) +
+        cols(ColsPerLine, CurrCols rem ColsPerLine, Chars, Unicode);
+cols(ColsPerLine, CurrCols, Chars, Unicode) ->
+    cols_int(ColsPerLine, CurrCols, Chars, Unicode).
+
+cols_int(ColsPerLine, CurrCols, Chars, Unicode) when CurrCols > ColsPerLine ->
+    ColsPerLine + cols_int(ColsPerLine, CurrCols - ColsPerLine, Chars, Unicode);
+cols_int(_ColsPerLine, CurrCols, [], _Unicode) ->
     CurrCols;
-cols(ColsPerLine, CurrCols, ["\r\n" | T], Unicode) ->
-    CurrCols + (ColsPerLine - CurrCols) + cols(ColsPerLine, 0, T, Unicode);
-cols(ColsPerLine, CurrCols, [H | T], Unicode) ->
-    cols(ColsPerLine, CurrCols + cols([H], Unicode), T, Unicode).
+cols_int(ColsPerLine, CurrCols, ["\r\n" | T], Unicode) ->
+    CurrCols + (ColsPerLine - CurrCols) + cols_int(ColsPerLine, 0, T, Unicode);
+cols_int(ColsPerLine, CurrCols, [H | T], Unicode) ->
+    cols_int(ColsPerLine, CurrCols + cols([H], Unicode), T, Unicode).
 
 update_geometry(State) ->
     case tty_window_size(State#state.tty) of
         {ok, {Cols, Rows}} when Cols > 0 ->
             ?dbg({?FUNCTION_NAME, Cols}),
-            State#state{ cols = Cols, rows = Rows };
+            State#state{ cols = Cols, rows = Rows};
         _Error ->
             ?dbg({?FUNCTION_NAME, _Error}),
             State
-    end.
-
-npwcwidthstring(String) when is_list(String) ->
-    npwcwidthstring(unicode:characters_to_binary(String));
-npwcwidthstring(String) ->
-    case string:next_grapheme(String) of
-        [] -> 0;
-        [$\e | Rest] ->
-            case re:run(String, ?ANSI_REGEXP, [unicode]) of
-                {match, [{0, N}]} ->
-                    <<_Ansi:N/binary, AnsiRest/binary>> = String,
-                    npwcwidthstring(AnsiRest);
-                _ ->
-                    npwcwidth($\e) + npwcwidthstring(Rest)
-            end;
-        [H|Rest] when is_list(H)-> lists:sum([npwcwidth(A)||A<-H]) + npwcwidthstring(Rest);
-        [H|Rest] -> npwcwidth(H) + npwcwidthstring(Rest)
     end.
 
 npwcwidth(Char) ->
@@ -1037,7 +1110,9 @@ npwcwidth(Char, true) ->
         C -> C
     end;
 npwcwidth(Char, false) ->
-    byte_size(char_to_latin1(Char, true)).
+    byte_size(char_to_latin1(Char, true));
+npwcwidth(Char, Encoding) ->
+    npwcwidth(Char, Encoding =/= latin1).
 
 
 %% Return the xn fix for the current cursor position.

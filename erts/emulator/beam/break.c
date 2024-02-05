@@ -294,7 +294,7 @@ print_process_info(fmtfn_t to, void *to_arg, Process *p, ErtsProcLocks orig_lock
     erts_print(to, to_arg, "Spawned as: %T:%T/%bpu\n",
 	       p->u.initial.module,
 	       p->u.initial.function,
-	       p->u.initial.arity);
+	       (Uint)p->u.initial.arity);
     
     if (p->current != NULL) {
 	if (running) {
@@ -305,7 +305,7 @@ print_process_info(fmtfn_t to, void *to_arg, Process *p, ErtsProcLocks orig_lock
 	erts_print(to, to_arg, "%T:%T/%bpu\n",
 		   p->current->module,
 		   p->current->function,
-		   p->current->arity);
+		   (Uint)p->current->arity);
     }
 
     erts_print(to, to_arg, "Spawned by: %T\n",
@@ -316,7 +316,7 @@ print_process_info(fmtfn_t to, void *to_arg, Process *p, ErtsProcLocks orig_lock
         len = erts_proc_sig_fetch(p);
         erts_proc_unlock(p, ERTS_PROC_LOCK_MSGQ);
     } else {
-        len = p->sig_qs.len;
+        len = p->sig_qs.mq_len;
     }
     erts_print(to, to_arg, "Message queue length: %d\n", len);
 
@@ -324,14 +324,13 @@ print_process_info(fmtfn_t to, void *to_arg, Process *p, ErtsProcLocks orig_lock
        and we can do it safely */
     if (!ERTS_IS_CRASH_DUMPING && p->sig_qs.first != NULL && !garbing
         && (locks & ERTS_PROC_LOCK_MAIN)) {
+        ErtsMessage *mp;
 	erts_print(to, to_arg, "Message queue: [");
-        ERTS_FOREACH_SIG_PRIVQS(
-            p, mp,
-            {
-                if (ERTS_SIG_IS_NON_MSG((ErtsSignal *) mp))
-                    erts_print(to, to_arg, mp->next ? "%T," : "%T",
-                               ERL_MESSAGE_TERM(mp));
-            });
+        for (mp = p->sig_qs.first; mp; mp = mp->next) {
+            if (ERTS_SIG_IS_NON_MSG((ErtsSignal *) mp))
+                erts_print(to, to_arg, mp->next ? "%T," : "%T",
+                           ERL_MESSAGE_TERM(mp));
+        }
 	erts_print(to, to_arg, "]\n");
     }
 
@@ -366,7 +365,7 @@ print_process_info(fmtfn_t to, void *to_arg, Process *p, ErtsProcLocks orig_lock
 		 erts_print(to, to_arg, "%T:%T/%bpu\n",
 			    scb->ct[j]->info.mfa.module,
 			    scb->ct[j]->info.mfa.function,
-			    scb->ct[j]->info.mfa.arity);
+			    (Uint)scb->ct[j]->info.mfa.arity);
        }
        erts_print(to, to_arg, "\n");
     }
@@ -736,16 +735,16 @@ bin_check(void)
         oh_list = rp->off_heap.first;
         for (;;) {
             for (hdr = oh_list; hdr; hdr = hdr->next) {
-                if (hdr->thing_word == HEADER_PROC_BIN) {
-                    ProcBin *bp = (ProcBin*) hdr;
+                if (hdr->thing_word == HEADER_BIN_REF) {
+                    Binary *bin = ((BinRef*)hdr)->val;
                     if (!printed) {
                         erts_printf("Process %T holding binary data \n", rp->common.id);
                         printed = 1;
                     }
                     erts_printf("%p orig_size: %bpd, norefs = %bpd\n",
-                                bp->val,
-                                bp->val->orig_size,
-                                erts_refc_read(&bp->val->intern.refc, 1));
+                                bin,
+                                bin->orig_size,
+                                erts_refc_read(&bin->intern.refc, 1));
                 }
             }
             if (oh_list == rp->wrt_bins)

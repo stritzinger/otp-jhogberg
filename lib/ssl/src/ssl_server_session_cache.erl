@@ -25,6 +25,7 @@
 %%----------------------------------------------------------------------
 
 -module(ssl_server_session_cache).
+-moduledoc false.
 -behaviour(gen_server).
 
 -include_lib("kernel/include/logger.hrl").
@@ -114,6 +115,7 @@ init([Listener, #{lifetime := Lifetime,
                  max := Max
                 }]) ->
     process_flag(trap_exit, true),
+    proc_lib:set_label({pre_tls_13_server_session_cache, Listener}),
     Monitor = monitor_listener(Listener),
     DbRef = init(Cb, [{role, server} | InitArgs]),
     State = #state{store_cb = Cb,

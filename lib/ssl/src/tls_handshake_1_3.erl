@@ -24,6 +24,7 @@
 %%----------------------------------------------------------------------
 
 -module(tls_handshake_1_3).
+-moduledoc false.
 
 -include("tls_handshake_1_3.hrl").
 -include("ssl_alert.hrl").
@@ -109,7 +110,6 @@ server_hello(MsgType, SessionId, KeyShare, PSK, ConnectionStates) ->
     Extensions = server_hello_extensions(MsgType, KeyShare, PSK),
     #server_hello{server_version = ?LEGACY_VERSION, %% legacy_version
 		  cipher_suite = SecParams#security_parameters.cipher_suite,
-                  compression_method = 0, %% legacy attribute
 		  random = server_hello_random(MsgType, SecParams),
 		  session_id = SessionId,
 		  extensions = Extensions
@@ -385,13 +385,11 @@ create_change_cipher_spec(#state{ssl_options = #{log_level := LogLevel}}) ->
     %% Dummy connection_states with NULL cipher
     ConnectionStates =
         #{current_write =>
-              #{compression_state => undefined,
-                cipher_state => undefined,
+              #{cipher_state => undefined,
                 sequence_number => 1,
                 security_parameters =>
                     #security_parameters{
                        bulk_cipher_algorithm = 0,
-                       compression_algorithm = ?NULL,
                        mac_algorithm = ?NULL
                       },
                 mac_secret => undefined}},
@@ -453,9 +451,10 @@ process_certificate(#certificate_1_3{certificate_list = CertEntries},
                                   crl_db = CRLDbHandle},
                            handshake_env =
                                #handshake_env{
-                                  ocsp_stapling_state = OcspState}} = State0) ->
-    case validate_certificate_chain(CertEntries, CertDbHandle, CertDbRef,
-                                    SslOptions, CRLDbHandle, Role, Host, OcspState) of
+                                  stapling_state = StaplingState}} = State0) ->
+    case validate_certificate_chain(
+           CertEntries, CertDbHandle, CertDbRef, SslOptions, CRLDbHandle, Role,
+           Host, StaplingState) of
         #alert{} = Alert ->
             State = update_encryption_state(Role, State0),
             {error, {Alert, State}};
@@ -603,7 +602,7 @@ encode_early_data(Cipher,
 
 decode_handshake(?SERVER_HELLO, <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
                                   ?BYTE(SID_length), Session_ID:SID_length/binary,
-                                  Cipher_suite:2/binary, ?BYTE(Comp_method),
+                                  Cipher_suite:2/binary, ?BYTE(_CompMethod),
                                   ?UINT16(ExtLen), Extensions:ExtLen/binary>>)
   when Random =:= ?HELLO_RETRY_REQUEST_RANDOM ->
     HelloExtensions = ssl_handshake:decode_hello_extensions(Extensions, ?TLS_1_3, {Major, Minor},
@@ -613,7 +612,6 @@ decode_handshake(?SERVER_HELLO, <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
        random = Random,
        session_id = Session_ID,
        cipher_suite = Cipher_suite,
-       compression_method = Comp_method,
        extensions = HelloExtensions};
 decode_handshake(?CERTIFICATE_REQUEST, <<?BYTE(0), ?UINT16(Size), EncExts:Size/binary>>) ->
     Exts = decode_extensions(EncExts, certificate_request),
@@ -809,42 +807,35 @@ update_encryption_state(client, State) ->
 
 
 validate_certificate_chain(CertEntries, CertDbHandle, CertDbRef,
-                           SslOptions, CRLDbHandle, Role, Host, OcspState0) ->
-    {Certs, CertExt, OcspState} = split_cert_entries(CertEntries, OcspState0),
-    OcspResponderCerts =
-        case maps:get(ocsp_stapling, SslOptions, disabled) of
-            #{ocsp_responder_certs := V} ->
-                V;
-            disabled ->
-                ?DEFAULT_OCSP_RESPONDER_CERTS
-        end,
-    ssl_handshake:certify(#certificate{asn1_certificates = Certs}, CertDbHandle, CertDbRef,
-                          SslOptions, CRLDbHandle, Role, Host, ?TLS_1_3,
-                          #{cert_ext => CertExt,
-                            ocsp_state => OcspState,
-                            ocsp_responder_certs => OcspResponderCerts}).
+                           SslOptions, CRLDbHandle, Role, Host, StaplingState) ->
+    {Certs, ExtInfo} = split_cert_entries(CertEntries, StaplingState, [], #{}),
+    ssl_handshake:certify(#certificate{asn1_certificates = Certs}, CertDbHandle,
+                          CertDbRef, SslOptions, CRLDbHandle, Role, Host, ?TLS_1_3,
+                          ExtInfo).
 
 store_peer_cert(#state{session = Session,
                        handshake_env = HsEnv} = State, PeerCert, PublicKeyInfo) ->
     State#state{session = Session#session{peer_certificate = PeerCert},
                 handshake_env = HsEnv#handshake_env{public_key_info = PublicKeyInfo}}.
 
-split_cert_entries(CertEntries, OcspState) ->
-    split_cert_entries(CertEntries, OcspState, [], #{}).
-
-split_cert_entries([], OcspState, Chain, Ext) ->
-    {lists:reverse(Chain), Ext, OcspState};
-split_cert_entries([#certificate_entry{data = DerCert, extensions = Extensions0} | CertEntries],
-                   OcspState0, Chain, Ext) ->
+split_cert_entries([], StaplingState, Chain, CertExt) ->
+    {lists:reverse(Chain), #{cert_ext => CertExt,
+                             stapling_state => StaplingState}};
+split_cert_entries([#certificate_entry{data = DerCert,
+                                       extensions = Extensions0} | CertEntries],
+                   #{configured := StaplingConfigured} = StaplingState0, Chain,
+                   CertExt) ->
     Id = public_key:pkix_subject_id(DerCert),
     Extensions = [ExtValue || {_, ExtValue} <- maps:to_list(Extensions0)],
-    OcspState = case maps:get(status_request, Extensions0, undefined) of
-                    undefined ->
-                        OcspState0;
-                    _ ->
-                        OcspState0#{ocsp_expect => stapled}
-                end,
-    split_cert_entries(CertEntries, OcspState, [DerCert | Chain], Ext#{Id => Extensions}).
+    StaplingState = case {maps:get(status_request, Extensions0, undefined),
+                          StaplingConfigured} of
+                        {undefined, _} ->
+                            StaplingState0;
+                        {_, true} ->
+                            StaplingState0#{status => received_staple}
+                    end,
+    split_cert_entries(CertEntries, StaplingState, [DerCert | Chain],
+                       CertExt#{Id => Extensions}).
 
 %% 4.4.1.  The Transcript Hash
 %%
@@ -1886,8 +1877,7 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
                   signature_algs := SignAlgos,
                   signature_algs_cert := SignAlgosCert} = Opts,
                 #{cert_ext := CertExt,
-                  ocsp_responder_certs := OcspResponderCerts,
-                  ocsp_state := OcspState}) ->
+                  stapling_state := StaplingState}) ->
     ValidationFunAndState =
         ssl_handshake:validation_fun_and_state(VerifyFun,
                                                #{role => Role,
@@ -1904,8 +1894,7 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
                                                  version => Version,
                                                  issuer => TrustedCert,
                                                  cert_ext => CertExt,
-                                                 ocsp_responder_certs => OcspResponderCerts,
-                                                 ocsp_state => OcspState,
+                                                 stapling_state => StaplingState,
                                                  path_len => length(Path)
                                                 },
                                                Path, LogLevel),

@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(edlin_key).
+-moduledoc false.
 -export([get_key_map/0, get_valid_escape_key/2]).
 -import(lists, [reverse/1, reverse/2]).
 get_key_map() ->
@@ -113,7 +114,7 @@ get_valid_escape_key(Rest, Acc) ->
     {invalid, Acc, Rest}.
 
 merge(KeyMap) ->
-    merge(KeyMap, [normal, search, tab_expand], key_map()).
+    merge(KeyMap, [normal, search, tab_expand, help], key_map()).
 merge(_, [], KeyMap) ->
     KeyMap;
 merge(InputKeyMap, [Mode|ShellModes], KeyMap) ->
@@ -153,6 +154,12 @@ merge(InputKeyMap, [Mode|ShellModes], KeyMap) ->
 key_map() -> #{
         normal => normal_map(),
         search => #{
+            "\^[OA" => move_expand_up,
+            "\^[[A" => move_expand_up,
+            "\^[OB" => move_expand_down,
+            "\^[[B" => move_expand_down,
+            "\^[[6~" => scroll_expand_down,
+            "\^[[5~" => scroll_expand_up,
             "\^R" => skip_up,
             "\^S" => skip_down,
             "\^[C" => search_cancel,
@@ -165,7 +172,22 @@ key_map() -> #{
             %% # everything else should exit search mode and edit the search result (search_quit),
         },
         tab_expand => #{
+            "\^[OA" => move_expand_up,
+            "\^[[A" => move_expand_up,
+            "\^[OB" => move_expand_down,
+            "\^[[B" => move_expand_down,
+            "\^[[6~" => scroll_expand_down,
+            "\^[[5~" => scroll_expand_up,
             "\t" => tab_expand_full,
+            default => tab_expand_quit %% go to normal mode and evaluate key input again
+        },
+        help => #{
+            "\^[OA" => move_expand_up,
+            "\^[[A" => move_expand_up,
+            "\^[OB" => move_expand_down,
+            "\^[[B" => move_expand_down,
+            "\^[[6~" => scroll_expand_down,
+            "\^[[5~" => scroll_expand_up,
             default => tab_expand_quit %% go to normal mode and evaluate key input again
         }
     }.
@@ -215,6 +237,8 @@ normal_map() ->
         "\^[d" => kill_word,
         "\^[F" => forward_word,
         "\^[f" => forward_word,
+        "\^[r" => format_expression,
+        "\^[h" => help,
         "\^[L" => redraw_line,
         "\^[l" => redraw_line,
         "\^[o" => open_editor,
@@ -288,21 +312,27 @@ valid_functions() ->
      clear_line,           %% Clear the current expression
      end_of_expression,    %% Move to the end of the expression
      end_of_line,          %% Move to the end of the line
+     format_expression,    %% Format the current expression
      forward_char,         %% Move forward one character
      forward_delete_char,  %% Delete the character under the cursor
      forward_delete_word,  %% Delete the characters until the closest non-word character
      forward_line,         %% Move forward one line
      forward_word,         %% Move forward one word
+     help,                 %% Open up a pager with help for function or module closest to the cursor
      history_down,         %% Move to the next item in the history
      history_up,           %% Move to the previous item in the history
      %%jcl_menu,
      kill_line,            %% Delete all characters from the cursor to the end of the line and save them in the kill buffer
      kill_word,            %% Delete the word behind the cursor and save it in the kill buffer
+     move_expand_up,       %% Move up one line in the expand area e.g. help or tab completion pager
+     move_expand_down,     %% Move down one line in the expand area e.g. help or tab completion pager
      new_line_finish,      %% Add a newline at the end of the line and try to evaluate the current expression
      new_line,             %% Add a newline at the cursor position
      none,                 %% Do nothing
      open_editor,          %% Open the current line in an editor i.e. EDITOR=code -w
      redraw_line,          %% Redraw the current line
+     scroll_expand_up,     %% Scroll up five lines in the expand area e.g. help or tab completion pager
+     scroll_expand_down,   %% Scroll down five lines in the expand area e.g. help or tab completion pager
      search_cancel,        %% Cancel the current search
      search_found,         %% Accept the current search result and submit it
      search_quit,          %% Accept the current search result, but edit it before submitting

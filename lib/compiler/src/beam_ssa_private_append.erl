@@ -36,6 +36,7 @@
 %% `bs_create_bin`.
 
 -module(beam_ssa_private_append).
+-moduledoc false.
 
 -export([opt/2]).
 
@@ -57,9 +58,8 @@
 -spec opt(st_map(), func_info_db()) -> {st_map(), func_info_db()}.
 opt(StMap, FuncDb) ->
     %% Ignore functions which are not in the function db (never
-    %% called) or are stubs for nifs.
-    Funs = [ F || F <- maps:keys(StMap),
-                  is_map_key(F, FuncDb), not is_nif(F, StMap)],
+    %% called).
+    Funs = [ F || F <- maps:keys(StMap), is_map_key(F, FuncDb)],
     private_append(Funs, StMap, FuncDb).
 
 private_append(Funs, StMap0, FuncDb) ->
@@ -633,9 +633,8 @@ patch_literal_tuple([], [], Patched, Extra, _, Cnt0) ->
     I = #b_set{op=put_tuple,dst=V,args=reverse(Patched)},
     {V, [I|Extra], Cnt}.
 
-%% As beam_ssa_opt:new_var/2, but with a hard-coded base
 new_var(Count) ->
-    {#b_var{name={alias_opt,Count}},Count+1}.
+    {#b_var{name=Count},Count+1}.
 
 %% Done with an accumulator to reverse the reversed block order from
 %% patch_appends_f/5.
@@ -651,16 +650,3 @@ insert_block_additions([Blk0={L,B=#b_blk{is=Is0}}|RevLinear],
     insert_block_additions(RevLinear, Lbl2Addition, [Blk|Acc]);
 insert_block_additions([], _, Acc) ->
     Acc.
-
-%%%
-%%% Predicate to check if a function is the stub for a nif.
-%%%
--spec is_nif(func_id(), st_map()) -> boolean().
-
-is_nif(F, StMap) ->
-    #opt_st{ssa=[{0,#b_blk{is=Is}}|_]} = map_get(F, StMap),
-    case Is of
-        [#b_set{op=nif_start}|_] ->
-            true;
-        _ -> false
-    end.

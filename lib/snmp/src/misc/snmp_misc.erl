@@ -19,6 +19,7 @@
 %% 
 
 -module(snmp_misc).
+-moduledoc false.
 
 %% need definition of mib record
 -include("snmp_types.hrl").
@@ -84,7 +85,12 @@ verify_behaviour(Behaviour, UserMod)
     case (catch UserMod:module_info(exports)) of
         Exps when is_list(Exps) ->
             Callbacks = Behaviour:behaviour_info(callbacks),
-            (catch verify_behaviour2(Callbacks, Exps));
+            OptionalCallbacks =
+                case Behaviour:behaviour_info(optional_callbacks) of
+                    undefined -> [];
+                    OC -> OC
+                end,
+            (catch verify_behaviour2(Callbacks -- OptionalCallbacks, Exps));
         _ ->
             {error, {bad_module, UserMod}}
     end;

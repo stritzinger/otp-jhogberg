@@ -26,8 +26,8 @@
 %% it goes.
 %%
 
--feature(maybe_expr, enable).
 -module(beam_ssa_type).
+-moduledoc false.
 -export([opt_start/2, opt_continue/4, opt_finish/3, opt_ranges/1]).
 
 -include("beam_ssa_opt.hrl").
@@ -65,7 +65,7 @@
 
 -type metadata() :: #metadata{}.
 -type meta_cache() :: #{ func_id() => metadata() }.
--type type_db() :: #{ beam_ssa:var_name() := ssa_type() }.
+-type type_db() :: #{ beam_ssa:b_var() := ssa_type() }.
 
 %% The types are the same as in 'beam_types.hrl', with the addition of
 %% `(fun(type_db()) -> type())` that defers figuring out the type until it's
@@ -295,9 +295,8 @@ sig_is([#b_set{op=call,
     Ts = update_types(I, Ts0, Ds0),
     Ds = Ds0#{ Dst => I },
     sig_is(Is, Ts, Ds, Ls, Fdb, Sub, State);
-sig_is([#b_set{op=MakeFun,args=Args0,dst=Dst}=I0|Is],
-       Ts0, Ds0, Ls, Fdb, Sub0, State0) when MakeFun =:= make_fun;
-                                             MakeFun =:= old_make_fun ->
+sig_is([#b_set{op=make_fun,args=Args0,dst=Dst}=I0|Is],
+       Ts0, Ds0, Ls, Fdb, Sub0, State0) ->
     Args = simplify_args(Args0, Ts0, Sub0),
     I1 = I0#b_set{args=Args},
 
@@ -351,10 +350,8 @@ sig_local_call(I0, Callee, Args, Ts, Fdb, State) ->
 %% While it's impossible to tell which arguments a fun will be called with
 %% (someone could steal it through tracing and call it), we do know its free
 %% variables and can update their types as if this were a local call.
-sig_make_fun(#b_set{op=MakeFun,
-                    args=[#b_local{}=Callee | FreeVars]}=I0,
-             Ts, Fdb, State) when MakeFun =:= make_fun;
-                                  MakeFun =:= old_make_fun ->
+sig_make_fun(#b_set{op=make_fun,args=[#b_local{}=Callee | FreeVars]}=I0,
+             Ts, Fdb, State) ->
     ArgCount = Callee#b_local.arity - length(FreeVars),
 
     FVTypes = [concrete_type(FreeVar, Ts) || FreeVar <- FreeVars],
@@ -571,9 +568,8 @@ opt_is([#b_set{op=call,
     Ts = update_types(I, Ts0, Ds0),
     Ds = Ds0#{ Dst => I },
     opt_is(Is, Ts, Ds, Ls, Fdb, Sub, Meta, [I | Acc]);
-opt_is([#b_set{op=MakeFun,args=Args0,dst=Dst}=I0|Is],
-       Ts0, Ds0, Ls, Fdb0, Sub0, Meta, Acc) when MakeFun =:= make_fun;
-                                                 MakeFun =:= old_make_fun ->
+opt_is([#b_set{op=make_fun,args=Args0,dst=Dst}=I0|Is],
+       Ts0, Ds0, Ls, Fdb0, Sub0, Meta, Acc) ->
     Args = simplify_args(Args0, Ts0, Sub0),
     I1 = I0#b_set{args=Args},
 
@@ -704,11 +700,10 @@ opt_local_call(I0, Callee, Args, Dst, Ts, Fdb, Meta) ->
     end.
 
 %% See sig_make_fun/4
-opt_make_fun(#b_set{op=MakeFun,
+opt_make_fun(#b_set{op=make_fun,
                     dst=Dst,
                     args=[#b_local{}=Callee | FreeVars]}=I0,
-             Ts, Fdb, Meta) when MakeFun =:= make_fun;
-                                 MakeFun =:= old_make_fun ->
+             Ts, Fdb, Meta) ->
     ArgCount = Callee#b_local.arity - length(FreeVars),
     FVTypes = [concrete_type(FreeVar, Ts) || FreeVar <- FreeVars],
     ArgTypes = duplicate(ArgCount, any) ++ FVTypes,
@@ -1049,17 +1044,28 @@ simplify(#b_set{op=bs_match,dst=Dst,args=Args0}=I0, Ts0, Ds0, _Ls, Sub) ->
 simplify(#b_set{op=bs_create_bin=Op,dst=Dst,args=Args0,anno=Anno}=I0,
          Ts0, Ds0, _Ls, Sub) ->
     Args = simplify_args(Args0, Ts0, Sub),
-    I1 = I0#b_set{args=Args},
-    #t_bitstring{size_unit=Unit} = T = type(Op, Args, Anno, Ts0, Ds0),
-    I2 = case T of
-             #t_bitstring{appendable=true} ->
-                 beam_ssa:add_anno(result_type, T, I1);
-             _ -> I1
-         end,
-    I = beam_ssa:add_anno(unit, Unit, I2),
-    Ts = Ts0#{ Dst => T },
-    Ds = Ds0#{ Dst => I },
-    {I, Ts, Ds};
+
+    case Args of
+        [#b_literal{val=binary},
+         #b_literal{val=[1|_]},
+         #b_literal{val=Bitstring}=Lit,
+         #b_literal{val=all}] when is_bitstring(Bitstring) ->
+            %% If all we're doing is creating a single constant bitstring, we
+            %% may as well return it directly.
+            Sub#{ Dst => Lit };
+        [_|_] ->
+            I1 = I0#b_set{args=Args},
+            #t_bitstring{size_unit=Unit} = T = type(Op, Args, Anno, Ts0, Ds0),
+            I2 = case T of
+                    #t_bitstring{appendable=true} ->
+                        beam_ssa:add_anno(result_type, T, I1);
+                    _ -> I1
+                end,
+            I = beam_ssa:add_anno(unit, Unit, I2),
+            Ts = Ts0#{ Dst => T },
+            Ds = Ds0#{ Dst => I },
+            {I, Ts, Ds}
+    end;
 simplify(#b_set{dst=Dst,args=Args0}=I0, Ts0, Ds0, _Ls, Sub) ->
     Args = simplify_args(Args0, Ts0, Sub),
     I1 = beam_ssa:normalize(I0#b_set{args=Args}),
@@ -1174,10 +1180,9 @@ simplify(#b_set{op={bif,Op0},args=[A,B]}=I, Ts, Ds) when Op0 =:= '==';
                {#t_integer{},#t_integer{}} ->
                    %% Both side contain integers but no floats.
                    true;
-               {#t_float{},#t_float{}} ->
-                   %% Both side contain floats but no integers.
-                   true;
                {_,_} ->
+                   %% Either side can contain a number, substitution is unsafe
+                   %% even if both sides are floats as `-0.0 == +0.0`
                    false
            end,
     case EqEq of
@@ -2218,8 +2223,7 @@ type(is_nonempty_list, [_], _Anno, _Ts, _Ds) ->
     beam_types:make_boolean();
 type(is_tagged_tuple, [_,#b_literal{},#b_literal{}], _Anno, _Ts, _Ds) ->
     beam_types:make_boolean();
-type(MakeFun, Args, Anno, _Ts, _Ds) when MakeFun =:= make_fun;
-                                         MakeFun =:= old_make_fun ->
+type(make_fun, Args, Anno, _Ts, _Ds) ->
     RetType = case Anno of
                   #{ result_type := Type } -> Type;
                   #{} -> any

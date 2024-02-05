@@ -2658,8 +2658,9 @@ restart:
 	    erts_dsprintf_buf_t *dsbufp = erts_create_tmp_dsbuf(0);
             ASSERT(c_p == self);
 	    print_process_info(ERTS_PRINT_DSBUF, (void *) dsbufp, c_p, ERTS_PROC_LOCK_MAIN);
-	    *esp++ = new_binary(build_proc, (byte *)dsbufp->str,
-				dsbufp->str_len);
+            *esp++ = erts_new_binary_from_data(build_proc,
+                                               dsbufp->str_len,
+                                               (byte *)dsbufp->str);
 	    erts_destroy_tmp_dsbuf(dsbufp);
 	    break;
 	}
@@ -3199,7 +3200,7 @@ void db_do_update_element(DbUpdateHandle* handle,
 		case _TAG_HEADER_POS_BIG:
 		case _TAG_HEADER_NEG_BIG:
 		case _TAG_HEADER_FLOAT:
-		case _TAG_HEADER_HEAP_BIN:
+		case _TAG_HEADER_HEAP_BITS:
 		    newval_sz = header_arity(*newp) + 1;
 		    if (is_boxed(oldval)) {
 			oldp = boxed_val(oldval);
@@ -3207,7 +3208,7 @@ void db_do_update_element(DbUpdateHandle* handle,
 			case _TAG_HEADER_POS_BIG:
 			case _TAG_HEADER_NEG_BIG:
 			case _TAG_HEADER_FLOAT:
-			case _TAG_HEADER_HEAP_BIN:
+			case _TAG_HEADER_HEAP_BITS:
 			    oldval_sz = header_arity(*oldp) + 1;
 			    if (oldval_sz == newval_sz) {
 				/* "self contained" terms of same size, do memcpy */
@@ -3287,9 +3288,7 @@ void db_free_term(DbTable *tb, void* basep, Uint offset)
 	size = db_alloced_size_comp(db);
     }
     else {
-	ErlOffHeap tmp_oh;
-	tmp_oh.first = db->first_oh;
-	erts_cleanup_offheap(&tmp_oh);
+        erts_cleanup_offheap_list(db->first_oh);
 	size = offset + offsetof(DbTerm,tpl) + db->size*sizeof(Eterm);
     }
     erts_db_free(ERTS_ALC_T_DB_TERM, tb, basep, size);
@@ -3315,9 +3314,7 @@ void db_free_term_no_tab(int compress, void* basep, Uint offset)
 	size = db_alloced_size_comp(db);
     }
     else {
-	ErlOffHeap tmp_oh;
-	tmp_oh.first = db->first_oh;
-	erts_cleanup_offheap(&tmp_oh);
+        erts_cleanup_offheap_list(db->first_oh);
 	size = offset + offsetof(DbTerm,tpl) + db->size*sizeof(Eterm);
     }
     erts_db_free(ERTS_ALC_T_DB_TERM, NULL, basep, size);
@@ -3388,8 +3385,14 @@ static void* copy_to_comp(int keypos, Eterm obj, DbTerm* dest,
 		tpl[i] = src[i];
 	    }
 	    else {
-		tpl[i] = ext2elem(tpl, top.cp);
-		top.cp = erts_encode_ext_ets(src[i], top.cp, &dest->first_oh);
+#ifdef DEBUG
+                Uint encoded_size = erts_encode_ext_size_ets(src[i]);
+                byte *orig_cp = top.cp;
+#endif
+                tpl[i] = ext2elem(tpl, top.cp);
+
+                top.cp = erts_encode_ext_ets(src[i], top.cp, &dest->first_oh);
+                ASSERT(top.cp == &orig_cp[encoded_size]);
 	    }
 	}
     }
@@ -3472,9 +3475,7 @@ void* db_store_term(DbTableCommon *tb, DbTerm* old, Uint offset, Eterm obj)
 
     if (old != 0) {
 	basep = ((byte*) old) - offset;
-	tmp_offheap.first  = old->first_oh;
-	erts_cleanup_offheap(&tmp_offheap);
-	old->first_oh = tmp_offheap.first;
+	erts_cleanup_offheap_list(old->first_oh);
 	if (size == old->size) {
 	    newp = old;
 	}
@@ -3729,7 +3730,7 @@ done:
 }
 
 /* Our own "cleanup_offheap"
- * as ProcBin and ErtsMRefThing may be unaligned in compressed terms
+ * as BinRef and ErtsMRefThing may be unaligned in compressed terms
 */
 void db_cleanup_offheap_comp(DbTerm* obj)
 {
@@ -3739,15 +3740,12 @@ void db_cleanup_offheap_comp(DbTerm* obj)
     for (u.hdr = obj->first_oh; u.hdr; u.hdr = u.hdr->next) {
         erts_align_offheap(&u, &tmp);
         switch (thing_subtag(u.hdr->thing_word)) {
-        case REFC_BINARY_SUBTAG:
-            erts_bin_release(u.pb->val);
+        case BIN_REF_SUBTAG:
+            erts_bin_release(u.br->val);
             break;
-        case FUN_SUBTAG:
-            /* We _KNOW_ that this is a local fun, otherwise it would not
-             * be part of the off-heap list. */
-            ASSERT(is_local_fun(u.fun));
-            if (erts_refc_dectest(&u.fun->entry.fun->refc, 0) == 0) {
-                erts_erase_fun_entry(u.fun->entry.fun);
+        case FUN_REF_SUBTAG:
+            if (erts_refc_dectest(&(u.fref->entry)->refc, 0) == 0) {
+                erts_erase_fun_entry(u.fref->entry);
             }
             break;
         case REF_SUBTAG:
@@ -6089,9 +6087,7 @@ DbTerm* db_alloc_tmp_uncompressed(DbTableCommon* tb, DbTerm* org)
 
 void db_free_tmp_uncompressed(DbTerm* obj)
 {
-    ErlOffHeap off_heap;
-    off_heap.first = obj->first_oh;
-    erts_cleanup_offheap(&off_heap);
+    erts_cleanup_offheap_list(obj->first_oh);
 #ifdef DEBUG_CLONE
     ASSERT(obj->debug_clone == NULL);
 #endif

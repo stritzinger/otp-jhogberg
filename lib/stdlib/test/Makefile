@@ -37,6 +37,7 @@ MODULES= \
 	error_info_lib \
 	error_logger_h_SUITE \
 	escript_SUITE \
+	ets_property_test_SUITE \
 	ets_SUITE \
 	ets_tough_SUITE \
 	filelib_SUITE \
@@ -44,6 +45,7 @@ MODULES= \
 	filename_SUITE \
 	fixtable_SUITE \
 	format_SUITE \
+	gb_sets_property_test_SUITE \
 	gen_event_SUITE \
 	gen_fsm_SUITE \
 	gen_server_SUITE \
@@ -71,6 +73,7 @@ MODULES= \
 	re_testoutput1_split_test \
 	slave_SUITE \
 	sets_SUITE \
+	sets_property_test_SUITE \
 	sets_test_lib \
 	sofs_SUITE \
 	stdlib_SUITE \
@@ -84,6 +87,7 @@ MODULES= \
 	naughty_child \
 	shell_SUITE \
 	shell_docs_SUITE \
+	sigils_SUITE \
 	supervisor_SUITE \
 	supervisor_bridge_SUITE \
 	sys_SUITE \

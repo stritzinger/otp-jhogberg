@@ -80,10 +80,10 @@ BeamGlobalAssembler::BeamGlobalAssembler(JitAllocator *allocator)
                           .name = code.labelEntry(labels[val.first])->name()});
     }
 
-    beamasm_metadata_update("global",
-                            (ErtsCodePtr)getBaseAddress(),
-                            code.codeSize(),
-                            ranges);
+    (void)beamasm_metadata_insert("global",
+                                  (ErtsCodePtr)getBaseAddress(),
+                                  code.codeSize(),
+                                  ranges);
 #endif
 
     /* `this->get_xxx` are populated last to ensure that we crash if we use them
@@ -125,9 +125,9 @@ void BeamGlobalAssembler::emit_garbage_collect() {
 
     a.mov(ARG1, c_p);
     load_x_reg_array(ARG3);
-    a.mov(ARG5, FCALLS);
+    a.mov(ARG5d, FCALLS);
     runtime_call<5>(erts_garbage_collect_nobump);
-    a.sub(FCALLS, RET);
+    a.sub(FCALLS, RETd);
 
     emit_leave_runtime<Update::eStack | Update::eHeap>();
 
@@ -234,7 +234,11 @@ void BeamGlobalAssembler::emit_export_trampoline() {
  * the return address as the error address.
  */
 void BeamModuleAssembler::emit_raise_exception() {
-    emit_raise_exception(nullptr);
+    safe_fragment_call(ga->get_raise_exception_null_exp());
+
+    /* `line` instructions need to know the latest offset that may throw an
+     * exception. See the `line` instruction for details. */
+    last_error_offset = a.offset();
 }
 
 void BeamModuleAssembler::emit_raise_exception(const ErtsCodeMFA *exp) {
@@ -292,6 +296,11 @@ void BeamGlobalAssembler::emit_process_exit() {
     a.je(labels[do_schedule]);
     comment("End of process");
     a.ud2();
+}
+
+void BeamGlobalAssembler::emit_raise_exception_null_exp() {
+    mov_imm(ARG4, 0);
+    a.jmp(labels[raise_exception]);
 }
 
 /* Helper function for throwing exceptions from global fragments.

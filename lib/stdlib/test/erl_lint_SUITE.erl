@@ -36,6 +36,7 @@
 -export([all/0, suite/0, groups/0]).
 
 -export([singleton_type_var_errors/1,
+         documentation_attributes/1,
          unused_vars_warn_basic/1,
          unused_vars_warn_lc/1,
          unused_vars_warn_rec/1,
@@ -84,7 +85,8 @@
          redefined_builtin_type/1,
          tilde_k/1,
          match_float_zero/1,
-         undefined_module/1]).
+         undefined_module/1,
+         update_literal/1]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -116,8 +118,10 @@ all() ->
      redefined_builtin_type,
      tilde_k,
      singleton_type_var_errors,
+     documentation_attributes,
      match_float_zero,
-     undefined_module].
+     undefined_module,
+     update_literal].
 
 groups() -> 
     [{unused_vars_warn, [],
@@ -906,6 +910,108 @@ unused_import(Config) when is_list(Config) ->
            ">>,
 	   [warn_unused_import],
 	   {warnings,[{{1,22},erl_lint,{unused_import,{{foldl,3},lists}}}]}}],
+    [] = run(Config, Ts),
+    ok.
+
+documentation_attributes(Config) when is_list(Config) ->
+    Ts = [{error_moduledoc,
+          <<"-moduledoc \"\"\"
+             Error
+             \"\"\".
+             -import(lists, []).
+
+             -moduledoc \"\"\"
+             Duplicate entry
+             \"\"\".
+             main() -> error.
+            ">>,
+          [],
+          {errors,[{{6,15},erl_lint,{moduledoc,duplicate_doc_attribute,1}}], []}},
+
+
+          {error_doc_import,
+          <<"-doc \"\"\"
+             Error
+             \"\"\".
+             -import(lists, []).
+
+             -doc \"\"\"
+             Duplicate entry
+             \"\"\".
+             main() -> error.
+            ">>,
+          [],
+          {errors,[{{6,15},erl_lint,{doc,duplicate_doc_attribute,1}}], []}},
+
+          {error_doc_export,
+           <<"-doc \"\"\"
+              Error
+              \"\"\".
+              -export([]).
+
+              -doc \"\"\"
+              Duplicate entry
+              \"\"\".
+              main() -> error.
+            ">>,
+          [],
+          {errors,[{{6,16},erl_lint,{doc,duplicate_doc_attribute,1}}], []}},
+
+          {error_doc_export_type,
+           <<"-doc \"\"\"
+              Error
+              \"\"\".
+              -export_type([]).
+
+              -doc \"\"\"
+              Duplicate entry
+              \"\"\".
+              main() -> error.
+            ">>,
+          [],
+          {errors,[{{6,16},erl_lint,{doc,duplicate_doc_attribute,1}}], []}},
+
+          {error_doc_include,
+           <<"-doc \"\"\"
+              Error
+              \"\"\".
+              -include_lib(\"common_test/include/ct.hrl\").
+
+              -doc \"\"\"
+              Duplicate entry
+              \"\"\".
+              main() -> error.
+            ">>,
+          [],
+          {errors,[{{6,16},erl_lint,{doc,duplicate_doc_attribute,1}}], []}},
+
+          {error_doc_behaviour,
+           <<"-doc \"\"\"
+              Error
+              \"\"\".
+              -behaviour(gen_server).
+
+              -doc \"\"\"
+              Duplicate entry
+              \"\"\".
+              main() -> error.
+            ">>,
+          [],
+          {error,[{{6,16},erl_lint,{doc,duplicate_doc_attribute,1}}],
+           [{{4,16},erl_lint,{undefined_behaviour_func,{handle_call,3},gen_server}},
+            {{4,16},erl_lint,{undefined_behaviour_func,{handle_cast,2},gen_server}},
+            {{4,16},erl_lint,{undefined_behaviour_func,{init,1},gen_server}}]}},
+
+          {ok_doc_in_wrong_position,
+           <<"-doc \"\"\"
+              Bad position, that gets attached to function.
+              We do not report this as an error.
+              \"\"\".
+              -include_lib(\"common_test/include/ct.hrl\").
+
+              main() -> ok.
+            ">>, [], []}
+         ],
     [] = run(Config, Ts),
     ok.
 
@@ -3945,10 +4051,11 @@ maps(Config) ->
                   ok.
             ">>,
            [],
-           {errors,[{{2,24},erl_lint,illegal_map_construction},
-                    {{4,24},erl_lint,illegal_map_construction},
-                    {{8,36},erl_lint,illegal_map_construction}],
-            []}},
+           {error,
+            [{{2,24},erl_lint,illegal_map_construction},
+             {{4,24},erl_lint,illegal_map_construction},
+             {{8,36},erl_lint,illegal_map_construction}],
+            [{{5,20},erl_lint,update_literal}]}},
           {illegal_pattern,
            <<"t(#{ a := A,
                    c => d,
@@ -5223,6 +5330,31 @@ undefined_module(Config) ->
               foo() -> ok.
              ">>,
     {errors,[{{1,2},erl_lint,undefined_module}],[]} = run_test2(Config, Code, []),
+
+    ok.
+
+update_literal(Config) ->
+    Ts = [{update_record_literal,
+           <<"-record(a, {b}).
+             t() -> #a{}#a{}#a{b=aoeu}.
+             k() -> A = #a{}, A#a{}#a{b=aoeu}.">>,
+           [],
+           {warnings,[{{2,25},erl_lint,update_literal},
+                      {{2,29},erl_lint,update_literal}]}},
+          {update_map_literal_assoc,
+           <<"t() -> #{}#{}#{b=>aoeu}.
+              k() -> A = #{}, A#{}#{b=>aoeu}.">>,
+           [],
+           {warnings,[{{1,31},erl_lint,update_literal},
+                      {{1,34},erl_lint,update_literal}]}},
+          {update_map_literal_exact,
+           <<"t() -> #{}#{}#{b:=aoeu}.
+              k() -> A = #{}, A#{}#{b:=aoeu}.">>,
+           [],
+           {warnings,[{{1,31},erl_lint,update_literal},
+                      {{1,34},erl_lint,update_literal}]}}
+         ],
+    [] = run(Config, Ts),
 
     ok.
 

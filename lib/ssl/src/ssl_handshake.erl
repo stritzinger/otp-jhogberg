@@ -23,7 +23,7 @@
 %%----------------------------------------------------------------------
 
 -module(ssl_handshake).
--feature(maybe_expr,enable).
+-moduledoc false.
 
 -include("ssl_handshake.hrl").
 -include("ssl_record.hrl").
@@ -70,13 +70,13 @@
 
 %% Cipher suites handling
 -export([available_suites/2, available_signature_algs/2,  available_signature_algs/3,
-         cipher_suites/3, select_session/9,
+         cipher_suites/3, select_session/8,
          premaster_secret/2, premaster_secret/3, premaster_secret/4]).
 
 %% Extensions handling
 -export([client_hello_extensions/10,
 	 handle_client_hello_extensions/10, %% Returns server hello extensions
-	 handle_server_hello_extensions/10, select_curve/2, select_curve/3,
+	 handle_server_hello_extensions/9, select_curve/2, select_curve/3,
          select_hashsign/4, select_hashsign/5,
 	 select_hashsign_algs/3, empty_extensions/2, add_server_share/3,
 	 add_alpn/2, add_selected_version/1, decode_alpn/1, max_frag_enum/1
@@ -114,8 +114,6 @@ server_hello(SessionId, Version, ConnectionStates, Extensions) ->
 	ssl_record:pending_connection_state(ConnectionStates, read),
     #server_hello{server_version = Version,
 		  cipher_suite = SecParams#security_parameters.cipher_suite,
-                  compression_method =
-		  SecParams#security_parameters.compression_algorithm,
 		  random = SecParams#security_parameters.server_random,
 		  session_id = SessionId,
 		  extensions = Extensions
@@ -339,7 +337,7 @@ next_protocol(SelectedProtocol) ->
 %%--------------------------------------------------------------------
 certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
         #{partial_chain := PartialChain} = SSlOptions,
-        CRLDbHandle, Role, Host, Version, CertExt) ->
+        CRLDbHandle, Role, Host, Version, ExtInfo) ->
     ServerName = server_name(SSlOptions, Host, Role),
     [PeerCert | _ChainCerts ] = ASN1Certs,
     try
@@ -348,7 +346,7 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
                                                    PartialChain),
         
 	case path_validate(PathsAndAnchors, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                           Version, SSlOptions, CertExt) of
+                           Version, SSlOptions, ExtInfo) of
 	    {ok, {PublicKeyInfo, _}} ->
                 {PeerCert, PublicKeyInfo};
 	    {error, Reason} ->
@@ -387,15 +385,15 @@ certificate_verify(Signature, PublicKeyInfo, Version,
 %% Description: Checks that a public_key signature is valid.
 %%--------------------------------------------------------------------
 verify_signature(_, Msg, {HashAlgo, SignAlgo}, Signature,
-                 {_, PubKey, PubKeyParams}) when  SignAlgo == rsa_pss_rsae;
-                                                  SignAlgo == rsa_pss_pss ->
-    Options = verify_options(SignAlgo, HashAlgo, PubKeyParams),
+                 {_, PubKey, _}) when  SignAlgo == rsa_pss_rsae;
+                                       SignAlgo == rsa_pss_pss ->
+    Options = verify_options(SignAlgo, HashAlgo),
     public_key:verify(Msg, HashAlgo, Signature, PubKey, Options);
-verify_signature(Version, Msg, {HashAlgo, SignAlgo}, Signature, {?rsaEncryption, PubKey, PubKeyParams})
+verify_signature(Version, Msg, {HashAlgo, SignAlgo}, Signature, {?rsaEncryption, PubKey, _})
   when ?TLS_GTE(Version, ?TLS_1_2) ->
-    Options = verify_options(SignAlgo, HashAlgo, PubKeyParams),
+    Options = verify_options(SignAlgo, HashAlgo),
     public_key:verify(Msg, HashAlgo, Signature, PubKey, Options);
-verify_signature(Version, {digest, Digest}, _HashAlgo, Signature, {?rsaEncryption, PubKey, _PubKeyParams})
+verify_signature(Version, {digest, Digest}, _HashAlgo, Signature, {?rsaEncryption, PubKey, _})
   when ?TLS_LTE(Version, ?TLS_1_1) ->
     case public_key:decrypt_public(Signature, PubKey,
 				   [{rsa_pad, rsa_pkcs1_padding}]) of
@@ -543,14 +541,13 @@ encode_handshake(#server_hello{server_version = ServerVersion,
 			       random = Random,
 			       session_id = Session_ID,
 			       cipher_suite = CipherSuite,
-			       compression_method = Comp_method,
 			       extensions = Extensions}, _Version) ->
 			SID_length = byte_size(Session_ID),
     {Major,Minor} = ServerVersion,
     ExtensionsBin = encode_hello_extensions(Extensions),
     {?SERVER_HELLO, <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
-		     ?BYTE(SID_length), Session_ID/binary,
-                     CipherSuite/binary, ?BYTE(Comp_method), ExtensionsBin/binary>>};
+                      ?BYTE(SID_length), Session_ID/binary,
+                      CipherSuite/binary, ?BYTE(?NO_COMPRESSION), ExtensionsBin/binary>>};
 encode_handshake(#certificate{asn1_certificates = ASN1CertList}, _Version) ->
     ASN1Certs = certs_from_list(ASN1CertList),
     ACLen = erlang:iolist_size(ASN1Certs),
@@ -849,28 +846,26 @@ decode_handshake(_, ?NEXT_PROTOCOL, <<?BYTE(SelectedProtocolLength),
     #next_protocol{selected_protocol = SelectedProtocol};
 
 decode_handshake(Version, ?SERVER_HELLO, <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
-					    ?BYTE(SID_length), Session_ID:SID_length/binary,
-					    Cipher_suite:2/binary, ?BYTE(Comp_method)>>) ->
+                                           ?BYTE(SID_length), Session_ID:SID_length/binary,
+                                           Cipher_suite:2/binary, ?BYTE(?NO_COMPRESSION)>>) ->
     #server_hello{
        server_version = {Major,Minor},
        random = Random,
        session_id = Session_ID,
        cipher_suite = Cipher_suite,
-       compression_method = Comp_method,
        extensions = empty_extensions(Version, server_hello)};
 
-decode_handshake(Version, ?SERVER_HELLO, <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
-		       ?BYTE(SID_length), Session_ID:SID_length/binary,
-		       Cipher_suite:2/binary, ?BYTE(Comp_method),
-		       ?UINT16(ExtLen), Extensions:ExtLen/binary>>) ->
+decode_handshake(Version, ?SERVER_HELLO,
+                 <<?BYTE(Major), ?BYTE(Minor), Random:32/binary,
+                   ?BYTE(SID_length), Session_ID:SID_length/binary,
+                   Cipher_suite:2/binary, ?BYTE(?NO_COMPRESSION),
+                   ?UINT16(ExtLen), Extensions:ExtLen/binary>>) ->
     HelloExtensions = decode_hello_extensions(Extensions, Version, {Major, Minor}, server_hello),
-
     #server_hello{
        server_version = {Major,Minor},
        random = Random,
        session_id = Session_ID,
        cipher_suite = Cipher_suite,
-       compression_method = Comp_method,
        extensions = HelloExtensions};
 decode_handshake(_Version, ?CERTIFICATE, <<?UINT24(ACLen), ASN1Certs:ACLen/binary>>) ->
     #certificate{asn1_certificates = certs_to_list(ASN1Certs)};
@@ -1054,7 +1049,8 @@ cipher_suites(Suites, false) ->
 cipher_suites(Suites, true) ->
     Suites.
 
-select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, SessIdTracker, Session0, Version, SslOpts, CertKeyAlts) ->
+select_session(SuggestedSessionId, CipherSuites, HashSigns, SessIdTracker, Session0,
+               Version, SslOpts, CertKeyAlts) ->
     CertKeyPairs = ssl_certificate:available_cert_key_pairs(CertKeyAlts, Version),
     {SessionId, Resumed} = ssl_session:server_select_session(Version, SessIdTracker, SuggestedSessionId,
                                                              SslOpts, CertKeyPairs),
@@ -1062,25 +1058,22 @@ select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, SessId
         undefined ->
             %% Select Cert
             Session = new_session_parameters(SessionId, Session0, CipherSuites,
-                                             SslOpts, Version, Compressions,
-                                             HashSigns, CertKeyPairs),
+                                             SslOpts, Version, HashSigns, CertKeyPairs),
 	    {new, Session};
 	_ ->
 	    {resumed, Resumed}
     end.
 
-
 new_session_parameters(SessionId, #session{ecc = ECCCurve0} = Session, CipherSuites, SslOpts,
-                       Version, Compressions, HashSigns, CertKeyPairs) ->
-    Compression = select_compression(Compressions),
-    {Certs, Key, {ECCCurve, CipherSuite}} = server_select_cert_key_pair_and_params(CipherSuites, CertKeyPairs, HashSigns,
-                                                                            ECCCurve0, SslOpts, Version),
+                       Version, HashSigns, CertKeyPairs) ->
+    {Certs, Key, {ECCCurve, CipherSuite}} =
+        server_select_cert_key_pair_and_params(CipherSuites, CertKeyPairs, HashSigns,
+                                               ECCCurve0, SslOpts, Version),
     Session#session{session_id = SessionId,
                     ecc = ECCCurve,
                     own_certificates = Certs,
                     private_key = Key,
-                    cipher_suite = CipherSuite,
-                    compression_method = Compression}.
+                    cipher_suite = CipherSuite}.
 
 %% Possibly support part of "trusted_ca_keys" extension that corresponds to TLS-1.3 certificate_authorities?!
 
@@ -1300,13 +1293,10 @@ maybe_add_tls13_extensions(?TLS_1_3,
 maybe_add_tls13_extensions(_, HelloExtensions, _, _, _, _,_) ->
     HelloExtensions.
 
-maybe_add_certificate_status_request(_Version, #{ocsp_stapling := OcspStapling},
+maybe_add_certificate_status_request(_Version, #{stapling := _Stapling},
                                      OcspNonce, HelloExtensions) ->
-    OcspResponderCerts = maps:get(ocsp_responder_certs, OcspStapling),
-    OcspResponderList = get_ocsp_responder_list(OcspResponderCerts),
     OcspRequestExtns = public_key:ocsp_extensions(OcspNonce),
-    Req = #ocsp_status_request{responder_id_list  = OcspResponderList,
-                               request_extensions = OcspRequestExtns},
+    Req = #ocsp_status_request{request_extensions = OcspRequestExtns},
     CertStatusReqExtn = #certificate_status_request{
         status_type = ?CERTIFICATE_STATUS_TYPE_OCSP,
         request = Req
@@ -1315,9 +1305,6 @@ maybe_add_certificate_status_request(_Version, #{ocsp_stapling := OcspStapling},
 maybe_add_certificate_status_request(_Version, _SslOpts, _OcspNonce,
                                      HelloExtensions) ->
     HelloExtensions.
-
-get_ocsp_responder_list(ResponderCerts) ->
-    lists:map(fun public_key:ocsp_responder_id/1, ResponderCerts).
 
 %% TODO: Add support for PSK key establishment
 
@@ -1463,15 +1450,14 @@ handle_client_hello_extensions(RecordCB, Random, ClientCipherSuites,
                                Exts, Version,
 			       #{secure_renegotiate := SecureRenegotation,
                                  alpn_preferred_protocols := ALPNPreferredProtocols} = Opts,
-			       #session{cipher_suite = NegotiatedCipherSuite,
-					compression_method = Compression} = Session0,
+			       #session{cipher_suite = NegotiatedCipherSuite} = Session0,
 			       ConnectionStates0, Renegotiation, IsResumed) ->
     Session = handle_srp_extension(maps:get(srp, Exts, undefined), Session0),
     MaxFragEnum = handle_mfl_extension(maps:get(max_frag_enum, Exts, undefined)),
     ConnectionStates1 = ssl_record:set_max_fragment_length(MaxFragEnum, ConnectionStates0),
     ConnectionStates = handle_renegotiation_extension(server, RecordCB, Version, maps:get(renegotiation_info, Exts, undefined),
 						      Random, NegotiatedCipherSuite, 
-						      ClientCipherSuites, Compression,
+						      ClientCipherSuites,
 						      ConnectionStates1, Renegotiation, SecureRenegotation),
 
     Empty = empty_extensions(Version, server_hello),
@@ -1505,7 +1491,7 @@ handle_client_hello_extensions(RecordCB, Random, ClientCipherSuites,
                                         encode_protocols_advertised_on_server(ProtocolsToAdvertise)}}
     end.
 
-handle_server_hello_extensions(RecordCB, Random, CipherSuite, Compression,
+handle_server_hello_extensions(RecordCB, Random, CipherSuite,
                                Exts, Version,
 			       #{secure_renegotiate := SecureRenegotation} =
                                    SslOpts,
@@ -1513,7 +1499,7 @@ handle_server_hello_extensions(RecordCB, Random, CipherSuite, Compression,
     ConnectionStates = handle_renegotiation_extension(client, RecordCB, Version,  
                                                       maps:get(renegotiation_info, Exts, undefined), Random, 
 						      CipherSuite, undefined,
-						      Compression, ConnectionStates0,
+						      ConnectionStates0,
 						      Renegotiation, SecureRenegotation),
 
     %% RFC 6066: handle received/expected maximum fragment length
@@ -1531,10 +1517,10 @@ handle_server_hello_extensions(RecordCB, Random, CipherSuite, Compression,
             ok
     end,
 
-    case handle_ocsp_extension(SslOpts, Exts) of
+    case handle_cert_status_extension(SslOpts, Exts) of
         #alert{} = Alert ->
             Alert;
-        OcspState ->
+        StaplingState ->
             %% If we receive an ALPN extension then this is the protocol selected,
             %% otherwise handle the NPN extension.
             ALPN = maps:get(alpn, Exts, undefined),
@@ -1542,14 +1528,14 @@ handle_server_hello_extensions(RecordCB, Random, CipherSuite, Compression,
                 %% ServerHello contains exactly one protocol: the one selected.
                 %% We also ignore the ALPN extension during renegotiation (see encode_alpn/2).
                 [Protocol] when not Renegotiation ->
-                    {ConnectionStates, alpn, Protocol, OcspState};
+                    {ConnectionStates, alpn, Protocol, StaplingState};
                 [_] when Renegotiation ->
-                    {ConnectionStates, alpn, undefined, OcspState};
+                    {ConnectionStates, alpn, undefined, StaplingState};
                 undefined ->
                     NextProtocolNegotiation = maps:get(next_protocol_negotiation, Exts, undefined),
                     NextProtocolSelector = maps:get(next_protocol_selector, SslOpts, undefined),
                     Protocol = handle_next_protocol(NextProtocolNegotiation, NextProtocolSelector, Renegotiation),
-                    {ConnectionStates, npn, Protocol, OcspState};
+                    {ConnectionStates, npn, Protocol, StaplingState};
                 {error, Reason} ->
                     ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, Reason);
                 [] ->
@@ -1955,22 +1941,22 @@ extension_value(#psk_key_exchange_modes{ke_modes = Modes}) ->
 extension_value(#cookie{cookie = Cookie}) ->
     Cookie.
 
-handle_ocsp_extension(#{ocsp_stapling := _OcspStapling}, Extensions) ->
+handle_cert_status_extension(#{stapling := _Stapling}, Extensions) ->
     case maps:get(status_request, Extensions, false) of
-        undefined -> %% status_request in server hello is empty
-            #{ocsp_stapling => true,
-              ocsp_expect => staple};
-        false -> %% status_request is missing (not negotiated)
-            #{ocsp_stapling => true,
-              ocsp_expect => no_staple};
+        undefined -> %% status_request received in server hello
+            #{configured => true,
+              status => negotiated};
+        false ->
+            #{configured => true,
+              status => not_negotiated};
         _Else ->
             ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, status_request_not_empty)
     end;
-handle_ocsp_extension(_SslOpts, Extensions) ->
+handle_cert_status_extension(_SslOpts, Extensions) ->
     case maps:get(status_request, Extensions, false) of
-        false -> %% status_request is missing (not negotiated)
-            #{ocsp_stapling => false,
-              ocsp_expect => no_staple};
+        false ->
+            #{configured => false,
+              status => not_negotiated};
         _Else -> %% unsolicited status_request
             ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, unexpected_status_request)
     end.
@@ -2018,11 +2004,11 @@ certificate_authorities_from_db(_CertDbHandle, {extracted, CertDbData}) ->
 
 %%-------------Handle handshake messages --------------------------------
 path_validate(TrustedAndPath, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-              Version, SslOptions, CertExt) ->
+              Version, SslOptions, ExtInfo) ->
     InitialPotentialError = {error, {bad_cert, unknown_ca}},
     InitialInvalidated = [],
     path_validate(TrustedAndPath, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                  Version, SslOptions, CertExt, InitialInvalidated, InitialPotentialError).
+                  Version, SslOptions, ExtInfo, InitialInvalidated, InitialPotentialError).
 
 validation_fun_and_state({Fun, UserState0}, VerifyState, CertPath, LogLevel) ->
     {fun(OtpCert, {extension, _} = Extension, {SslState, UserState}) ->
@@ -2138,41 +2124,58 @@ do_digitally_signed(Version, Msg, HashAlgo, {#'RSAPrivateKey'{} = Key,
                                              #'RSASSA-PSS-params'{}}, SignAlgo) when ?TLS_GTE(Version, ?TLS_1_2) ->
     Options = signature_options(SignAlgo, HashAlgo),
     public_key:sign(Msg, HashAlgo, Key, Options);
-do_digitally_signed(Version, {digest, Digest}, _HashAlgo, #'RSAPrivateKey'{} = Key, rsa) when ?TLS_LTE(Version, ?TLS_1_1) ->
+do_digitally_signed(Version, {digest, Digest}, _HashAlgo, #'RSAPrivateKey'{} = Key, rsa)
+  when ?TLS_LTE(Version, ?TLS_1_1) ->
     public_key:encrypt_private(Digest, Key,
 			       [{rsa_pad, rsa_pkcs1_padding}]);
+do_digitally_signed(Version, {digest, Digest}, _HashAlgo, #{algorithm := rsa, encrypt_fun := Fun} = Key0, rsa)
+  when ?TLS_LTE(Version, ?TLS_1_1) ->
+    CustomOpts = maps:get(encrypt_opts, Key0, []),
+    Key = #{algorithm => rsa, encrypt_fun => Fun},
+    public_key:encrypt_private(Digest, Key, CustomOpts ++ [{rsa_pad, rsa_pkcs1_padding}]);
 do_digitally_signed(Version, {digest, Digest}, _,
-                    #{algorithm := rsa} = Engine, rsa) when ?TLS_LTE(Version, ?TLS_1_1) ->
+                    #{algorithm := rsa, engine := _} = Engine, rsa) when ?TLS_LTE(Version, ?TLS_1_1) ->
     crypto:private_encrypt(rsa, Digest, maps:remove(algorithm, Engine),
                            rsa_pkcs1_padding);
-do_digitally_signed(_, Msg, HashAlgo, #{algorithm := Alg} = Engine, SignAlgo) ->
+do_digitally_signed(_, Msg, HashAlgo, #{algorithm := Alg, engine := _} = Engine, SignAlgo) ->
     Options = signature_options(SignAlgo, HashAlgo),
     crypto:sign(Alg, HashAlgo, Msg, maps:remove(algorithm, Engine), Options);
 do_digitally_signed(Version, {digest, _} = Msg , HashAlgo, Key, _) when ?TLS_LTE(Version,?TLS_1_1) ->
     public_key:sign(Msg, HashAlgo, Key);
+do_digitally_signed(_, Msg, HashAlgo, #{algorithm := SignAlgo, sign_fun := Fun} = Key0, SignAlgo) ->
+    CustomOpts = maps:get(sign_opts, Key0, []),
+    Options = signature_options(SignAlgo, HashAlgo),
+    Key = #{algorithm => SignAlgo, sign_fun => Fun},
+    public_key:sign(Msg, HashAlgo, Key, CustomOpts ++ Options);
 do_digitally_signed(_, Msg, HashAlgo, Key, SignAlgo) ->
     Options = signature_options(SignAlgo, HashAlgo),
     public_key:sign(Msg, HashAlgo, Key, Options).
-
     
-signature_options(SignAlgo, HashAlgo) when SignAlgo =:= rsa_pss_rsae orelse
-                                           SignAlgo =:= rsa_pss_pss ->
-    pss_options(HashAlgo);
+signature_options(rsa_pss_rsae, HashAlgo) ->
+    pss_options(HashAlgo, hash_algo_byte_size(HashAlgo));
+signature_options(rsa_pss_pss, HashAlgo) ->
+    pss_options(HashAlgo, hash_algo_byte_size(HashAlgo));
 signature_options(_, _) ->
     [].
 
-verify_options(SignAlgo, HashAlgo, _KeyParams)
-  when SignAlgo =:= rsa_pss_rsae orelse
-       SignAlgo =:= rsa_pss_pss ->
-    pss_options(HashAlgo);
-verify_options(_, _, _) ->
+verify_options(rsa_pss_rsae, HashAlgo) ->
+    pss_options(HashAlgo, hash_algo_byte_size(HashAlgo));
+verify_options(rsa_pss_pss, HashAlgo) ->
+    pss_options(HashAlgo, hash_algo_byte_size(HashAlgo));
+verify_options(_, _) ->
     [].
 
-pss_options(HashAlgo) ->
-    %% of the digest algorithm: rsa_pss_saltlen = -1
+pss_options(HashAlgo, SaltLen) ->
     [{rsa_padding, rsa_pkcs1_pss_padding},
-     {rsa_pss_saltlen, -1},
+     {rsa_pss_saltlen, SaltLen},
      {rsa_mgf1_md, HashAlgo}].
+
+hash_algo_byte_size(sha256) ->
+    32;
+hash_algo_byte_size(sha384) ->
+    48;
+hash_algo_byte_size(sha512) ->
+    64.
 
 bad_key(#'DSAPrivateKey'{}) ->
     unacceptable_dsa_key;
@@ -2182,29 +2185,29 @@ bad_key(#'ECPrivateKey'{}) ->
     unacceptable_ecdsa_key;
 bad_key(#{algorithm := rsa}) ->
     unacceptable_rsa_key;
+bad_key(#{algorithm := rsa_pss_pss}) ->
+    unacceptable_rsa_pss_pss_key;
+bad_key(#{algorithm := eddsa}) ->
+    unacceptable_eddsa_key;
 bad_key(#{algorithm := ecdsa}) ->
     unacceptable_ecdsa_key.
 
 cert_status_check(_,
-                  #{ocsp_state := #{ocsp_stapling := true,
-                                    ocsp_expect := stapled}},
+                  #{stapling_state := #{configured := true,
+                                        status := received_staple}},
                   _VerifyResult, _, _) ->
-    %% OCSP staple will now be checked by
+    %% OCSP staple(s) will now be checked by
     %% ssl_certificate:verify_cert_extensions/2 in ssl_certificate:validate
     valid;
 cert_status_check(OtpCert,
-                  #{ocsp_state := #{ocsp_stapling := false}} = SslState,
+                  #{stapling_state := #{configured := false}} = SslState,
                   VerifyResult, CertPath, LogLevel) ->
     maybe_check_crl(OtpCert, SslState, VerifyResult, CertPath, LogLevel);
 cert_status_check(_OtpCert,
-                  #{ocsp_state := #{ocsp_stapling := true,
-                                    ocsp_expect := undetermined}},
-                  _VerifyResult, _CertPath, _LogLevel) ->
-    {bad_cert, {revocation_status_undetermined, not_stapled}};
-cert_status_check(_OtpCert,
-                  #{ocsp_state := #{ocsp_stapling := true,
-                                    ocsp_expect := no_staple}},
-                  _VerifyResult, _CertPath, _LogLevel) ->
+                  #{stapling_state := #{configured := true,
+                                        status := StaplingStatus}},
+                  _VerifyResult, _CertPath, _LogLevel)
+  when StaplingStatus == not_negotiated; StaplingStatus == not_received ->
     {bad_cert, {revocation_status_undetermined, not_stapled}}.
 
 maybe_check_crl(_, #{crl_check := false}, _, _, _) ->
@@ -2361,7 +2364,7 @@ calc_master_secret(Version, PrfAlgo, PremasterSecret, ClientRandom, ServerRandom
 %% hello messages
 %% NOTE : Role is the role of the receiver of the hello message
 %%        currently being processed.
-hello_pending_connection_states(_RecordCB, Role, Version, CipherSuite, Random, Compression,
+hello_pending_connection_states(_RecordCB, Role, Version, CipherSuite, Random,
 				 ConnectionStates) ->
     ReadState =
 	ssl_record:pending_connection_state(ConnectionStates, read),
@@ -2369,35 +2372,26 @@ hello_pending_connection_states(_RecordCB, Role, Version, CipherSuite, Random, C
 	ssl_record:pending_connection_state(ConnectionStates, write),
 
     NewReadSecParams =
-	hello_security_parameters(Role, Version, ReadState, CipherSuite,
-			    Random, Compression),
-
+	hello_security_parameters(Role, Version, ReadState, CipherSuite, Random),
+    
     NewWriteSecParams =
-	hello_security_parameters(Role, Version, WriteState, CipherSuite,
-			    Random, Compression),
+	hello_security_parameters(Role, Version, WriteState, CipherSuite, Random),
 
     ssl_record:set_security_params(NewReadSecParams,
 				    NewWriteSecParams,
 				    ConnectionStates).
 
-hello_security_parameters(client, Version, #{security_parameters := SecParams}, CipherSuite, Random,
-			  Compression) ->
+hello_security_parameters(client, Version, #{security_parameters := SecParams},
+                          CipherSuite, Random) ->
     NewSecParams = ssl_cipher:security_parameters(Version, CipherSuite, SecParams),
-    NewSecParams#security_parameters{
-      server_random = Random,
-      compression_algorithm = Compression
-     };
+    NewSecParams#security_parameters{server_random = Random};
 
-hello_security_parameters(server, Version, #{security_parameters := SecParams}, CipherSuite, Random,
-			  Compression) ->
+hello_security_parameters(server, Version, #{security_parameters := SecParams},
+                          CipherSuite, Random) ->
     NewSecParams = ssl_cipher:security_parameters(Version, CipherSuite, SecParams),
     NewSecParams#security_parameters{
-      client_random = Random,
-      compression_algorithm = Compression
+      client_random = Random
      }.
-
-select_compression(_CompressionMetodes) ->
-    ?NULL.
 
 do_select_version(_, ClientVersion, []) ->
     ClientVersion;
@@ -3398,7 +3392,7 @@ filter_unavailable_ecc_suites(_, Suites) ->
 %%-------------Extension handling --------------------------------
 
 handle_renegotiation_extension(Role, RecordCB, Version, Info, Random, NegotiatedCipherSuite, 
-			       ClientCipherSuites, Compression,
+			       ClientCipherSuites,
 			       ConnectionStates0, Renegotiation, SecureRenegotation) ->
     {ok, ConnectionStates} = handle_renegotiation_info(Version, RecordCB, Role, Info, ConnectionStates0,
                                                        Renegotiation, SecureRenegotation,
@@ -3407,7 +3401,6 @@ handle_renegotiation_extension(Role, RecordCB, Version, Info, Random, Negotiated
                                     Version,
                                     NegotiatedCipherSuite,
                                     Random,
-                                    Compression,
                                     ConnectionStates).
 
 %% Receive protocols, choose one from the list, return it.
@@ -3796,23 +3789,28 @@ path_validate([], _, _, _, _, _, _, _, _, _, {error, {bad_cert, root_cert_expire
 path_validate([], _, _, _, _, _, _, _, _, _, Error) ->
     Error;
 path_validate([{TrustedCert, Path} | Rest], ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-              Version, SslOptions, CertExt, InvalidatedList, Error) ->
+              Version, SslOptions, ExtInfo, InvalidatedList, Error) ->
     CB = path_validation_cb(Version),
     case CB:path_validation(trusted_unwrap(TrustedCert), Path, ServerName,
                             Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                            Version, SslOptions, CertExt) of
+                            Version, SslOptions, ExtInfo) of
         {error, {bad_cert, root_cert_expired}} = NewError ->
             NewInvalidatedList = [TrustedCert | InvalidatedList],
-            Alt = ssl_certificate:find_cross_sign_root_paths(Path, CertDbHandle, CertDbRef, NewInvalidatedList),
-            path_validate(Alt ++ Rest, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                          Version, SslOptions, CertExt, NewInvalidatedList, NewError);
+            Alt = ssl_certificate:find_cross_sign_root_paths(
+                    Path, CertDbHandle,CertDbRef, NewInvalidatedList),
+            path_validate(Alt ++ Rest, ServerName, Role, CertDbHandle,
+                          CertDbRef, CRLDbHandle, Version, SslOptions,
+                          ExtInfo, NewInvalidatedList, NewError);
         {error, {bad_cert, unknown_ca}} = NewError ->
-            Alt = ssl_certificate:find_cross_sign_root_paths(Path, CertDbHandle, CertDbRef, InvalidatedList),
-            path_validate(Alt ++ Rest, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                          Version, SslOptions, CertExt, InvalidatedList,  error_to_propagate(Error, NewError));
+            Alt = ssl_certificate:find_cross_sign_root_paths(
+                    Path, CertDbHandle, CertDbRef, InvalidatedList),
+            path_validate(Alt ++ Rest, ServerName, Role, CertDbHandle,
+                          CertDbRef, CRLDbHandle, Version, SslOptions,
+                          ExtInfo, InvalidatedList,
+                          error_to_propagate(Error, NewError));
         {error, _} when Rest =/= []->
             path_validate(Rest, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                          Version, SslOptions, CertExt, InvalidatedList, Error);
+                          Version, SslOptions, ExtInfo, InvalidatedList, Error);
         Result ->
             Result
     end.
@@ -3831,11 +3829,10 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
                   crl_check := CrlCheck,
                   log_level := Level} = Opts,
                 #{cert_ext := CertExt,
-                  ocsp_responder_certs := OcspResponderCerts,
-                  ocsp_state := OcspState}) ->
+                  stapling_state := StaplingState}) ->
     SignAlgos = maps:get(signature_algs, Opts, undefined),
     SignAlgosCert = maps:get(signature_algs_cert, Opts, undefined),
-    ValidationFunAndState = 
+    ValidationFunAndState =
         validation_fun_and_state(VerifyFun, #{role => Role,
                                               certdb => CertDbHandle,
                                               certdb_ref => CertDbRef,
@@ -3849,8 +3846,7 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
                                               crl_db => CRLDbHandle,
                                               cert_ext => CertExt,
                                               issuer => TrustedCert,
-                                              ocsp_responder_certs => OcspResponderCerts,
-                                              ocsp_state => OcspState,
+                                              stapling_state => StaplingState,
                                               path_len => length(Path)
                                              },
                                  Path, Level),
@@ -3877,6 +3873,6 @@ handle_trace(csp,
                      [_Version, SslOpts,
                       _OcspNonce, _HelloExtensions]}},
              Stack) ->
-    OcspStapling = maps:get(ocsp_stapling, SslOpts, false),
-    {io_lib:format("#1 ADD crt status request / OcspStapling option = ~W",
-                   [OcspStapling, 10]), Stack}.
+    Stapling = maps:get(stapling, SslOpts, false),
+    {io_lib:format("#1 ADD crt status request / Stapling option = ~W",
+                   [Stapling, 10]), Stack}.

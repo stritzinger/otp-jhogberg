@@ -19,8 +19,6 @@
 %% This module tests that beam_ssa_alias_opt:opt/2 correctly annotates
 %% instructions with information about unique and aliased operands.
 %%
--feature(maybe_expr, enable).
-
 -compile(no_ssa_opt_private_append).
 
 -module(alias).
@@ -67,6 +65,7 @@
          in_cons/0,
          make_fun/0,
          gh6925/0,
+         binary_part_aliases/2,
          aliased_map_lookup_bif/1,
          aliased_map_lookup_instr/1,
          aliased_tuple_element_bif/1,
@@ -690,6 +689,14 @@ gh6925() ->
     A = << <<"x">> || true >>,
     B = <<A/binary, "z">>,
     {A, B}.
+
+%% Check that bif:binary_part/3 is correctly flagged as an operation
+%% which aliases its operands
+binary_part_aliases(A, B) ->
+%ssa% (_,_) when post_ssa_opt ->
+%ssa% X = bif:binary_part(_, _, _),
+%ssa% ret(X) {aliased => [X]}.
+    binary_part(<<>>, A, B).
 
 %% Check that as the map is aliased, the extracted value should also
 %% be aliased.

@@ -19,6 +19,7 @@
 %%
 
 -module(beam_trim).
+-moduledoc false.
 -export([module/2]).
 
 -import(lists, [any/2,reverse/1,reverse/2,seq/2,sort/1]).
@@ -292,9 +293,6 @@ remap([{recv_marker_clear,Ref}|Is], Remap) ->
 remap([{recv_marker_reserve,Mark}|Is], Remap) ->
     I = {recv_marker_reserve,remap_arg(Mark, Remap)},
     [I|remap(Is, Remap)];
-remap([{swap,Reg1,Reg2}|Is], Remap) ->
-    I = {swap,remap_arg(Reg1, Remap),remap_arg(Reg2, Remap)},
-    [I|remap(Is, Remap)];
 remap([{test,Name,Fail,Ss}|Is], Remap) ->
     I = {test,Name,Fail,remap_args(Ss, Remap)},
     [I|remap(Is, Remap)];
@@ -547,12 +545,6 @@ do_usage([{recv_marker_clear,Src}|Is], Safe, Regs0, Ns, Acc) ->
     do_usage(Is, Safe, Regs, Ns, [U|Acc]);
 do_usage([{recv_marker_reserve,Src}|Is], Safe, Regs0, Ns, Acc) ->
     Regs = ordsets:union(Regs0, yregs([Src])),
-    U = {Regs,Ns},
-    do_usage(Is, Safe, Regs, Ns, [U|Acc]);
-do_usage([{swap,R1,R2}|Is], Safe, Regs0, Ns0, Acc) ->
-    Ds = yregs([R1,R2]),
-    Regs = ordsets:union(Regs0, Ds),
-    Ns = ordsets:union(Ns0, Ds),
     U = {Regs,Ns},
     do_usage(Is, Safe, Regs, Ns, [U|Acc]);
 do_usage([{test,_,Fail,Ss}|Is], Safe, Regs0, Ns, Acc) ->

@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(inet_config).
+-moduledoc false.
 
 -include("inet_config.hrl").
 -include("inet.hrl").
@@ -458,12 +459,8 @@ get_rc(File) ->
 	    error
     end.
 
-%% XXX Check if we really need to prim load the stuff
 get_file(File) ->
-    case erl_prim_loader:get_file(File) of
-	{ok,Bin,_} -> {ok,Bin};
-	Error -> Error
-    end.
+    erl_prim_loader:read_file(File).
 
 error(Fmt, Args) ->
     error_logger:error_msg("inet_config: " ++ Fmt, Args).
