@@ -323,7 +323,7 @@
 -define(int_range(From, To),       ?integer(#int_rng{from=From, to=To})).
 -define(int_set(Set),              ?integer(#int_set{set=Set})).
 -define(nominal(Name, Types),      #c{tag=?nominal_tag, elements={Name,Types}}).
--define(nominal_set(Nominals),     #c{tag=?nominal_set_tag, elements=Nominals}).
+-define(nominal_set(Nominals, Structurals),     #c{tag=?nominal_set_tag, elements={Nominals, Structurals}}).
 -define(list(Types, Term, Size),   #c{tag=?list_tag, elements={Types,Term},
 				      qualifier=Size}).
 -define(nil,                       #c{tag=?nil_tag}).
@@ -2575,31 +2575,36 @@ t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
   ?nominal(Name, t_sup(S1, S2));
 t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
   if
-    N1 < N2   -> ?nominal_set([T1,T2]);
-    N1 > N2   -> ?nominal_set([T2,T1])
+    N1 < N2   -> ?nominal_set([T1,T2],?none);
+    N1 > N2   -> ?nominal_set([T2,T1],?none)
   end;
-t_sup(?nominal_set(_) = T1,?nominal_set(_) = T2) ->
-  sup_nominal_sets(T1,T2,[]);
-t_sup(?nominal_set(_) = T1,?nominal(_,_) = T2) -> 
-  sup_nominal_sets(T1,?nominal_set([T2]),[]);
-t_sup(?nominal(_,_)=T1,?nominal_set(_) = T2) ->
+t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
+  NU1 = sup_nominal_sets(N1,N2,[]),
+  ?union(U1) = force_union(S1),
+  ?union(U2) = force_union(S2),
+  U3 = sup_union(U1,U2),
+  lists:foldl(fun(Nominal, Acc) -> sup_union(force_union(Acc), t_sup(Nominal,U3)) end, ?nominal_set([],?none), NU1);
+t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
+  t_sup(T1,?nominal_set([T2],?none));
+t_sup(?nominal(_,_)=T1,?nominal_set(_,_) = T2) ->
   t_sup(T2,T1);
 t_sup(?nominal(_,S1)=T1, S2) ->
   Inf = t_inf(S1, S2),
   case t_is_none_or_unit(Inf) of
     true -> 
-      ?union(U1) = force_union(T1),
-      ?union(U2) = force_union(S2),
-      sup_union(U1,U2);
+      %?union(U1) = force_union(T1),
+      %?union(U2) = force_union(S2),
+      %sup_union(U1,U2),
+      ?nominal_set([T1],S2);
     false -> t_sup(S1, S2)
   end;
 t_sup(S1, ?nominal(_,_)=T2) ->
   t_sup(T2,S1);
-t_sup(?nominal_set([H]),S) ->
-  t_sup(H,S);
-t_sup(?nominal_set([H|T]),S) ->
-  t_sup(?nominal_set(T), t_sup(H, S));
-t_sup(S,?nominal_set(_)=T2) ->
+t_sup(?nominal_set([H],S1),S2) ->
+  t_sup(H,t_sup(S1,S2));
+t_sup(?nominal_set([H|T],S1),S2) ->
+  t_sup(?nominal_set(T,?none), t_sup(H, t_sup(S1,S2)));
+t_sup(S,?nominal_set(_,_)=T2) ->
   t_sup(T2,S);
 t_sup(T1, T2) ->
   ?union(U1) = force_union(T1),
@@ -2707,6 +2712,14 @@ sup_tuples_in_set([?tuple(Elements1, Arity, Tag1) = T1|Left1] = L1,
 sup_tuples_in_set([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_tuples_in_set(L1, [], Acc) -> lists:reverse(Acc, L1).
 
+%(Seems to be unnecessary) This can only be executed if only one of the unions is a force_union of structural types, the other is a force_union of nominal types
+%sup_union(?nominal_set(_,_)=U1, U2) -> 
+  %true = length(U1) =:= length(U2), %Assertion.
+  %true = ?num_types_in_union =:= length(U1), %Assertion
+  %?nominal_set(sup_union(U1,[?none,?none,?none,?none,?none,?none,?none,?none,?none]), sup_union(U2,[?none,?none,?none,?none,?none,?none,?none,?none,?none])).
+%sup_union(U1, ?nominal(_,_)=U2) ->
+  %sup_union(U2,U1).
+
 sup_union(U1, U2) ->
   true = length(U1) =:= length(U2), %Assertion.
   true = ?num_types_in_union =:= length(U1), %Assertion
@@ -2747,7 +2760,7 @@ force_union(T = ?nominal(_, _)) ->
   IdentifierSlot = t_inf(T, t_identifier()),
   List = t_inf(T, t_list()),
   Nil = t_inf(T, t_nil()),
-  ListSlot = sup_union(List,Nil),
+  ListSlot = t_sup(List,Nil),
   NumberSlot = t_inf(T, t_number()),
   OpaqueSlot = t_contains_opaque(T),
   MapSlot = t_inf(T, t_map()),
@@ -2777,7 +2790,7 @@ t_elements(?identifier(?any) = T, _Opaques) -> [T];
 t_elements(?identifier(IDs), _Opaques) ->
   [?identifier([T]) || T <- IDs];
 t_elements(?nominal(_,_) = T, _Opaques) -> [T];
-t_elements(?nominal_set(_) = T, _Opaques) -> [T];
+t_elements(?nominal_set(_,_) = T, _Opaques) -> [T];
 t_elements(?list(_, _, _) = T, _Opaques) -> [T];
 t_elements(?number(_, _) = T, _Opaques) ->
   case T of
@@ -2897,6 +2910,18 @@ t_inf(?nominal(N, S1), ?nominal(N, S2), _) ->
   ?nominal(N, t_inf(S1,S2));
 t_inf(?nominal(_, _), ?nominal(_, _), _) ->
   t_none();
+t_inf(?nominal_set(N1,S1),?nominal_set(N2,S2),Opaques) ->
+  In = inf_nominal_sets(N1,N2,[],Opaques),
+  Is = t_inf(S1,S2),
+  t_inf(In,Is,Opaques);
+t_inf(?nominal_set([?nominal(N,S1)|_],Other1), ?nominal(N,S2)=T2, Opaques)-> 
+  t_sup(?nominal(N, t_inf(S1,S2)), t_inf(T2, Other1, Opaques));
+t_inf(?nominal_set([?nominal(_,_)],_), ?nominal(_,_),_) -> 
+  ?none;
+t_inf(?nominal_set([_|T],S), ?nominal(_,_) = N,_) -> 
+  t_inf(?nominal_set([T],S), N);
+t_inf(?nominal(_,_)=T1,?nominal_set(_,_)=T2,Opaques) ->
+  t_inf(T2,T1,Opaques);
 t_inf(?nominal(Name, S1), S2, _) ->
   Inf = t_inf(S1, S2),
   case t_is_none_or_unit(Inf) of
@@ -2905,25 +2930,21 @@ t_inf(?nominal(Name, S1), S2, _) ->
   end;
 t_inf(A, ?nominal(_, _)=B, Opaques) ->
   t_inf(B, A, Opaques);
-t_inf(?nominal_set(_)=T1,?nominal_set(_)=T2,Opaques) ->
-  inf_nominal_sets(T1,T2,[],Opaques);
-t_inf(?nominal_set([?nominal(N,S1)|_]), ?nominal(N,S2),_)-> 
-  ?nominal(N, t_inf(S1,S2));
-t_inf(?nominal_set([?nominal(_,_)]), ?nominal(_,_),_) -> 
-  ?none;
-t_inf(?nominal_set([_|T]), ?nominal(_,_) = N,_) -> 
-  t_inf(?nominal_set(T), N);
-t_inf(?nominal(_,_)=T1,?nominal_set(_)=T2,Opaques) ->
-  t_inf(T2,T1,Opaques);
-t_inf(?nominal_set([H]), S, Opaques) ->
-  t_inf(H,S,Opaques);
-t_inf(?nominal_set([H|T]), S, Opaques) ->
-  Inf = t_inf(H,S,Opaques),
-  case t_is_none_or_unit(Inf) of
-      true -> t_inf(?nominal_set(T), S);
-      false -> t_sup(t_inf(?nominal_set(T), S, Opaques), Inf)
+%Is this correct, S2 can have at most one non-empty intersection with H or S1?
+t_inf(?nominal_set([H],S1), S2, Opaques) ->
+  SInf = t_inf(S1, S2, Opaques),
+  case t_is_none_or_unit(SInf) of
+    true -> SInf;
+    false -> t_inf(H, S2, Opaques)
   end;
-t_inf(S, ?nominal_set(_)=T2, Opaques) ->
+%Not related to the logic here, but is this correct: S2 can have at most one non-empty intersection with either the nominal parts, or S2?
+t_inf(?nominal_set([H|T],S1), S2, Opaques) ->
+  Inf = t_inf(H, S2),
+  case t_is_none_or_unit(Inf) of
+      true -> t_inf(?nominal_set(T,S1), S2);
+      false -> t_sup(t_inf(?nominal_set(T,S1), S2, Opaques), Inf)
+  end;
+t_inf(S, ?nominal_set(_,_)=T2, Opaques) ->
   t_inf(T2, S, Opaques);
 t_inf(?nil, ?nil, _Opaques) -> ?nil;
 t_inf(?nil, ?nonempty_list(_, _), _Opaques) ->
@@ -4204,8 +4225,8 @@ t_to_string(?nominal(Name, Structure), RecDict) ->
   StructureString = t_to_string(Structure, RecDict),
   flat_format("nominal(~w, ~ts)", [Name, StructureString]);
 % TODO: Follow the format above
-t_to_string(?nominal_set(T), _RecDict) ->
-  set_to_string(T);
+t_to_string(?nominal_set(T,S), RecDict) ->
+  "{" ++ comma_sequence(T, RecDict) ++ "|" ++ t_to_string(S) ++ "}";
 t_to_string(?number(?any, ?unknown_qual), _RecDict) -> "number()";
 t_to_string(?product(List), RecDict) ->
   "<" ++ comma_sequence(List, RecDict) ++ ">";
