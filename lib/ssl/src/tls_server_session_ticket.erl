@@ -23,6 +23,7 @@
 %%----------------------------------------------------------------------
 
 -module(tls_server_session_ticket).
+-moduledoc false.
 -behaviour(gen_server).
 
 -include("tls_handshake_1_3.hrl").
@@ -87,6 +88,7 @@ use(Pid, Identifiers, Prf, HandshakeHist) ->
 -spec init(Args :: term()) -> {ok, State :: term()}.                             
 init([Listener | Args]) ->
     process_flag(trap_exit, true),
+    proc_lib:set_label({tls_13_server_session_tickets, Listener}),
     Monitor = inet:monitor(Listener),
     State = initial_state(Args),
     {ok, State#state{listen_monitor = Monitor}}.

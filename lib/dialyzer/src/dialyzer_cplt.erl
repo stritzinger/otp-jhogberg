@@ -27,6 +27,7 @@
 %%% Created : 23 Jul 2004 by Tobias Lindahl <tobiasl@it.uu.se>
 %%%-------------------------------------------------------------------
 -module(dialyzer_cplt).
+-moduledoc false.
 
 -export([check_plt/3,
 	 compute_md5_from_files/1,
@@ -490,9 +491,8 @@ tab_merge('$end_of_table', T1, T2) ->
       tab_merge(Key, T1, T2)
   end;
 tab_merge(K1, T1, T2) ->
-  Vs = ets:lookup(T1, K1),
   NextK1 = ets:next(T1, K1),
-  true = ets:delete(T1, K1),
+  Vs = ets:take(T1, K1),
   true = ets:insert(T2, Vs),
   tab_merge(NextK1, T1, T2).
 

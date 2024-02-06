@@ -69,6 +69,57 @@ int beam_load_prepare_emit(LoaderState *stp) {
     hdr->md5_ptr = NULL;
     hdr->are_nifs = NULL;
 
+    stp->coverage = hdr->coverage = NULL;
+    stp->line_coverage_valid = hdr->line_coverage_valid = NULL;
+
+    hdr->line_coverage_len = 0;
+
+    if (stp->beam.lines.flags & BEAMFILE_FORCE_LINE_COUNTERS) {
+        hdr->coverage_mode = ERTS_COV_LINE_COUNTERS;
+    } else if ((stp->beam.lines.flags & BEAMFILE_EXECUTABLE_LINE) == 0 &&
+               (erts_coverage_mode == ERTS_COV_LINE ||
+                erts_coverage_mode == ERTS_COV_LINE_COUNTERS)) {
+        /* A line coverage mode is enabled, but there are no
+         * executable_line instructions in this module; therefore,
+         * turn off coverage for this module. */
+        hdr->coverage_mode = ERTS_COV_NONE;
+    } else {
+        /* Use the system default coverage mode for this module. */
+        hdr->coverage_mode = erts_coverage_mode;
+    }
+
+    switch (hdr->coverage_mode) {
+    case ERTS_COV_FUNCTION:
+    case ERTS_COV_FUNCTION_COUNTERS: {
+        size_t alloc_size = hdr->num_functions;
+        if (hdr->coverage_mode == ERTS_COV_FUNCTION_COUNTERS) {
+            alloc_size *= sizeof(Uint);
+        }
+        stp->coverage = erts_alloc(ERTS_ALC_T_CODE_COVERAGE, alloc_size);
+        sys_memset(stp->coverage, 0, alloc_size);
+        break;
+    }
+    case ERTS_COV_LINE:
+    case ERTS_COV_LINE_COUNTERS: {
+        size_t alloc_size = stp->beam.lines.instruction_count;
+        Uint coverage_size;
+
+        if (hdr->coverage_mode == ERTS_COV_LINE) {
+            coverage_size = sizeof(byte);
+        } else {
+            coverage_size = sizeof(Uint);
+        }
+        stp->coverage = erts_alloc(ERTS_ALC_T_CODE_COVERAGE,
+                                   alloc_size * coverage_size);
+        sys_memset(stp->coverage, 0, alloc_size * coverage_size);
+        stp->line_coverage_valid =
+                erts_alloc(ERTS_ALC_T_CODE_COVERAGE, alloc_size);
+        sys_memset(stp->line_coverage_valid, 0, alloc_size);
+        hdr->line_coverage_len = alloc_size;
+        break;
+    }
+    }
+
     stp->load_hdr = hdr;
 
     stp->labels = erts_alloc(ERTS_ALC_T_PREPARED_CODE,
@@ -77,15 +128,15 @@ int beam_load_prepare_emit(LoaderState *stp) {
         init_label(&stp->labels[i]);
     }
 
-    stp->lambda_literals = erts_alloc(ERTS_ALC_T_PREPARED_CODE,
-                                      stp->beam.lambdas.count * sizeof(SWord));
+    stp->fun_refs = erts_alloc(ERTS_ALC_T_PREPARED_CODE,
+                               stp->beam.lambdas.count * sizeof(SWord));
 
     for (i = 0; i < stp->beam.lambdas.count; i++) {
         BeamFile_LambdaEntry *lambda = &stp->beam.lambdas.entries[i];
 
         if (stp->labels[lambda->label].lambda_index == INVALID_LAMBDA_INDEX) {
             stp->labels[lambda->label].lambda_index = i;
-            stp->lambda_literals[i] = ERTS_SWORD_MAX;
+            stp->fun_refs[i] = ERTS_SWORD_MAX;
         } else {
             beam_load_report_error(__LINE__,
                                    stp,
@@ -171,6 +222,14 @@ int beam_load_prepared_dtor(Binary *magic) {
             erts_free(ERTS_ALC_T_PREPARED_CODE, hdr->are_nifs);
             hdr->are_nifs = NULL;
         }
+        if (hdr->coverage) {
+            erts_free(ERTS_ALC_T_CODE_COVERAGE, hdr->coverage);
+            hdr->coverage = NULL;
+        }
+        if (hdr->line_coverage_valid) {
+            erts_free(ERTS_ALC_T_CODE_COVERAGE, hdr->line_coverage_valid);
+            hdr->line_coverage_valid = NULL;
+        }
 
         erts_free(ERTS_ALC_T_PREPARED_CODE, hdr);
         stp->load_hdr = NULL;
@@ -181,9 +240,9 @@ int beam_load_prepared_dtor(Binary *magic) {
         stp->labels = NULL;
     }
 
-    if (stp->lambda_literals) {
-        erts_free(ERTS_ALC_T_PREPARED_CODE, (void *)stp->lambda_literals);
-        stp->lambda_literals = NULL;
+    if (stp->fun_refs) {
+        erts_free(ERTS_ALC_T_PREPARED_CODE, (void *)stp->fun_refs);
+        stp->fun_refs = NULL;
     }
 
     if (stp->bif_imports) {
@@ -199,6 +258,16 @@ int beam_load_prepared_dtor(Binary *magic) {
     if (stp->func_line) {
         erts_free(ERTS_ALC_T_PREPARED_CODE, stp->func_line);
         stp->func_line = NULL;
+    }
+
+    if (stp->coverage) {
+        erts_free(ERTS_ALC_T_CODE_COVERAGE, stp->coverage);
+        stp->coverage = NULL;
+    }
+
+    if (stp->line_coverage_valid) {
+        erts_free(ERTS_ALC_T_CODE_COVERAGE, stp->line_coverage_valid);
+        stp->line_coverage_valid = NULL;
     }
 
     if (stp->ba) {
@@ -586,6 +655,30 @@ int beam_load_emit_op(LoaderState *stp, BeamOp *tmp_op) {
             goto load_error;
         }
         break;
+    case op_executable_line_I: {
+        byte coverage_size = 0;
+
+        /* We'll save some memory by not inserting a line entry that
+         * is equal to the previous one. */
+        if (add_line_entry(stp, tmp_op->a[0].val, 0)) {
+            goto load_error;
+        }
+        if (stp->load_hdr->coverage_mode == ERTS_COV_LINE) {
+            coverage_size = sizeof(byte);
+        } else if (stp->load_hdr->coverage_mode == ERTS_COV_LINE_COUNTERS) {
+            coverage_size = sizeof(Uint);
+        }
+        if (coverage_size) {
+            unsigned loc_index = stp->current_li - 1;
+            ASSERT(stp->beam.lines.item_count > 0);
+            stp->line_coverage_valid[loc_index] = 1;
+            beamasm_emit_coverage(stp->ba,
+                                  stp->coverage,
+                                  loc_index,
+                                  coverage_size);
+        }
+        break;
+    }
     case op_int_code_end:
         /* End of code found. */
         if (stp->function_number != stp->beam.code.function_count) {
@@ -598,6 +691,27 @@ int beam_load_emit_op(LoaderState *stp, BeamOp *tmp_op) {
         stp->function = THE_NON_VALUE;
         stp->genop = NULL;
         stp->specific_op = -1;
+
+        if (stp->load_hdr->coverage_mode == ERTS_COV_LINE ||
+            stp->load_hdr->coverage_mode == ERTS_COV_LINE_COUNTERS) {
+            stp->load_hdr->line_coverage_len = stp->current_li;
+        }
+        break;
+    case op_i_test_yield:
+        if (stp->load_hdr->coverage_mode == ERTS_COV_FUNCTION) {
+            ASSERT(stp->function_number != 0);
+            beamasm_emit_coverage(stp->ba,
+                                  stp->coverage,
+                                  stp->function_number - 1,
+                                  sizeof(byte));
+        } else if (stp->load_hdr->coverage_mode == ERTS_COV_FUNCTION_COUNTERS) {
+            ASSERT(stp->function_number != 0);
+            beamasm_emit_coverage(stp->ba,
+                                  stp->coverage,
+                                  stp->function_number - 1,
+                                  sizeof(Uint));
+        }
+        break;
     }
 
     return 1;
@@ -765,6 +879,12 @@ int beam_load_finish_emit(LoaderState *stp) {
                          (const char *)stp->beam.checksum,
                          sizeof(stp->beam.checksum));
 
+    /* Transfer ownership of the coverage tables to the prepared code. */
+    stp->load_hdr->coverage = stp->coverage;
+    stp->load_hdr->line_coverage_valid = stp->line_coverage_valid;
+    stp->coverage = NULL;
+    stp->line_coverage_valid = NULL;
+
     /* Move the code to its final location. */
     beamasm_codegen(stp->ba,
                     &stp->executable_region,
@@ -893,7 +1013,7 @@ load_error:
 void beam_load_finalize_code(LoaderState *stp,
                              struct erl_module_instance *inst_p) {
     ErtsCodeIndex staging_ix;
-    int code_size, i;
+    int code_size;
 
     ERTS_LC_ASSERT(erts_initialized == 0 || erts_has_code_load_permission() ||
                    erts_thr_progress_is_blocking());
@@ -929,7 +1049,7 @@ void beam_load_finalize_code(LoaderState *stp,
     /* Exported functions */
     staging_ix = erts_staging_code_ix();
 
-    for (i = 0; i < stp->beam.exports.count; i++) {
+    for (int i = 0; i < stp->beam.exports.count; i++) {
         BeamFile_ExportEntry *entry = &stp->beam.exports.entries[i];
         ErtsCodePtr address;
         Export *ep;
@@ -949,7 +1069,7 @@ void beam_load_finalize_code(LoaderState *stp,
 
     /* Patch external function calls, this is done after exporting functions as
      * the module may remote-call itself*/
-    for (i = 0; i < stp->beam.imports.count; i++) {
+    for (int i = 0; i < stp->beam.imports.count; i++) {
         BeamFile_ImportEntry *entry = &stp->beam.imports.entries[i];
         Export *import;
 
@@ -960,12 +1080,13 @@ void beam_load_finalize_code(LoaderState *stp,
 
     /* Patch fun creation. */
     if (stp->beam.lambdas.count) {
-        ErtsLiteralArea *literal_area = (stp->code_hdr)->literal_area;
         BeamFile_LambdaTable *lambda_table = &stp->beam.lambdas;
 
-        for (i = 0; i < lambda_table->count; i++) {
+        for (int i = 0; i < lambda_table->count; i++) {
             BeamFile_LambdaEntry *lambda;
             ErlFunEntry *fun_entry;
+            FunRef *fun_refp;
+            Eterm fun_ref;
 
             lambda = &lambda_table->entries[i];
 
@@ -976,53 +1097,62 @@ void beam_load_finalize_code(LoaderState *stp,
                                             lambda->index,
                                             lambda->arity - lambda->num_free);
 
-            if (erts_is_fun_loaded(fun_entry, staging_ix)) {
-                /* We've reloaded a module over itself and inherited the old
-                 * instance's fun entries, so we need to undo the reference
-                 * bump in `erts_put_fun_entry2` to make fun purging work. */
-                erts_refc_dectest(&fun_entry->refc, 1);
+            ASSERT(stp->fun_refs[i] != ERTS_SWORD_MAX);
+            fun_ref = beamfile_get_literal(&stp->beam, stp->fun_refs[i]);
+
+            /* If there are no free variables, the literal refers to an
+             * ErlFunThing that needs to be fixed up before we process the
+             * FunRef. */
+            if (lambda->num_free == 0) {
+                ErlFunThing *funp = (ErlFunThing *)boxed_val(fun_ref);
+                ASSERT(fun_env_size(funp) == 1 && funp->entry.fun == NULL);
+                funp->entry.fun = fun_entry;
+                fun_ref = funp->env[0];
+            }
+
+            fun_refp = (FunRef *)boxed_val(fun_ref);
+            fun_refp->entry = fun_entry;
+
+            /* Bump the reference count: this could not be done when copying
+             * the literal as we had no idea which entry it belonged to.
+             *
+             * We also need to parry an annoying wrinkle: when reloading a
+             * module over itself, we inherit the old instance's fun entries,
+             * and thus have to cancel the reference bump in
+             * `erts_put_fun_entry2` to make fun purging work. */
+            if (!erts_is_fun_loaded(fun_entry, staging_ix)) {
+                erts_refc_inctest(&fun_entry->refc, 1);
             }
 
             erts_set_fun_code(fun_entry,
                               staging_ix,
                               beamasm_get_lambda(stp->ba, i));
 
-            /* Finalize the literal we've created for this lambda, if any,
-             * converting it from an external fun to a local one with the newly
-             * created fun entry. */
-            if (stp->lambda_literals[i] != ERTS_SWORD_MAX) {
-                ErlFunThing *funp;
-                Eterm literal;
-
-                literal = beamfile_get_literal(&stp->beam,
-                                               stp->lambda_literals[i]);
-                funp = (ErlFunThing *)fun_val(literal);
-                ASSERT(funp->creator == am_external);
-
-                funp->entry.fun = fun_entry;
-
-                funp->next = literal_area->off_heap;
-                literal_area->off_heap = (struct erl_off_heap_header *)funp;
-
-                ASSERT(erts_init_process_id != ERTS_INVALID_PID);
-                funp->creator = erts_init_process_id;
-
-                erts_refc_inc(&fun_entry->refc, 2);
-            }
-
             beamasm_patch_lambda(stp->ba, stp->writable_region, i, fun_entry);
         }
     }
 
     /* Register debug / profiling info with external tools. */
-    beamasm_register_metadata(stp->ba, stp->code_hdr);
+    inst_p->metadata = beamasm_register_metadata(stp->ba, stp->code_hdr);
 
     erts_seal_module(inst_p);
 
     /* Prevent literals and code from being freed. */
     (stp->load_hdr)->literal_area = NULL;
     stp->load_hdr->are_nifs = NULL;
+    stp->load_hdr->coverage = NULL;
+    stp->load_hdr->line_coverage_valid = NULL;
     stp->executable_region = NULL;
     stp->writable_region = NULL;
     stp->code_hdr = NULL;
+}
+
+void beam_load_purge_aux(const BeamCodeHeader *hdr) {
+    if (hdr->coverage) {
+        erts_free(ERTS_ALC_T_CODE_COVERAGE, hdr->coverage);
+    }
+
+    if (hdr->line_coverage_valid) {
+        erts_free(ERTS_ALC_T_CODE_COVERAGE, hdr->line_coverage_valid);
+    }
 }

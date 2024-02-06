@@ -100,7 +100,11 @@ void BeamModuleAssembler::emit_fstore(const ArgFRegister &Src,
     a.lea(ARG1, x86::qword_ptr(HTOP, make_float(0)));
     mov_arg(Dst, ARG1);
 
-    a.add(HTOP, imm(FLOAT_SIZE_OBJECT * sizeof(Eterm)));
+    preserve_cache(
+            [&]() {
+                a.add(HTOP, imm(FLOAT_SIZE_OBJECT * sizeof(Eterm)));
+            },
+            HTOP);
 }
 
 /* ARG2 = source term */
@@ -114,7 +118,7 @@ void BeamGlobalAssembler::emit_fconv_shared() {
 
     auto boxed_ptr = emit_ptr_val(ARG2, ARG2);
     a.mov(ARG2, emit_boxed_val(boxed_ptr));
-    a.and_(ARG2, imm(_TAG_HEADER_MASK - _BIG_SIGN_BIT));
+    a.and_(ARG2, imm(_BIG_TAG_MASK));
     a.cmp(ARG2, imm(_TAG_HEADER_POS_BIG));
     a.short_().jne(error);
 

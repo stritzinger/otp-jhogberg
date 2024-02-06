@@ -19,6 +19,7 @@
 %%
 
 -module(erl_stdlib_errors).
+-moduledoc false.
 -export([format_error/2]).
 
 -spec format_error(Reason, StackTrace) -> ErrorMap when
@@ -162,7 +163,7 @@ format_binary_error(split, [Subject, Pattern, _Options], _) ->
 format_binary_error(replace, [Subject, Pattern, Replacement], _) ->
     [must_be_binary(Subject),
      must_be_pattern(Pattern),
-     must_be_binary(Replacement)];
+     must_be_binary_replacement(Replacement)];
 format_binary_error(replace, [Subject, Pattern, Replacement, _Options], Cause) ->
     Errors = format_binary_error(replace, [Subject, Pattern, Replacement], Cause),
     case Cause of
@@ -665,6 +666,8 @@ format_ets_error(match_spec_compile, [_], _Cause) ->
     [bad_matchspec];
 format_ets_error(next, Args, Cause) ->
     format_default(bad_key, Args, Cause);
+format_ets_error(next_lookup, Args, Cause) ->
+    format_default(bad_key, Args, Cause);
 format_ets_error(new, [Name,Options], Cause) ->
     NameError = if
                     is_atom(Name) -> [];
@@ -680,6 +683,8 @@ format_ets_error(new, [Name,Options], Cause) ->
             [NameError, OptsError]
     end;
 format_ets_error(prev, Args, Cause) ->
+    format_default(bad_key, Args, Cause);
+format_ets_error(prev_lookup, Args, Cause) ->
     format_default(bad_key, Args, Cause);
 format_ets_error(rename, [_,NewName]=Args, Cause) ->
     case [format_cause(Args, Cause),
@@ -772,6 +777,8 @@ format_ets_error(update_element, [_,_,ElementSpec]=Args, Cause) ->
      case Cause of
          keypos ->
              [same_as_keypos];
+	 position ->
+	     [update_op_range];
          _ ->
              case is_element_spec_top(ElementSpec) of
                  true ->
@@ -785,6 +792,26 @@ format_ets_error(update_element, [_,_,ElementSpec]=Args, Cause) ->
                      [<<"is not a valid element specification">>]
              end
      end];
+format_ets_error(update_element, [_, _, ElementSpec, Default]=Args, Cause) ->
+    TabCause = format_cause(Args, Cause),
+    ArgsCause = case Cause of
+		    keypos ->
+			 [same_as_keypos];
+		    position ->
+			[update_op_range];
+		    _ ->
+			case {is_element_spec_top(ElementSpec), format_tuple(Default)} of
+			    {true, [""]} ->
+				[range];
+			    {true, TupleCause} ->
+				["" | TupleCause];
+			    {false, [""]} ->
+				[<<"is not a valid element specification">>];
+			    {false, TupleCause} ->
+				["" | TupleCause]
+			end
+		end,
+    [TabCause, "" | ArgsCause];
 format_ets_error(whereis, _Args, _Cause) ->
     [bad_table_name];
 format_ets_error(_, Args, Cause) ->
@@ -1014,6 +1041,10 @@ must_be_pattern(P) ->
         error:badarg ->
             bad_binary_pattern
     end.
+
+must_be_binary_replacement(R) when is_binary(R) -> [];
+must_be_binary_replacement(R) when is_function(R, 1) -> [];
+must_be_binary_replacement(_R) -> bad_replacement.
 
 must_be_position(Pos) when is_integer(Pos), Pos >= 0 -> [];
 must_be_position(Pos) when is_integer(Pos) -> range;

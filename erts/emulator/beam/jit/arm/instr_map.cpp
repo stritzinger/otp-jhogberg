@@ -29,58 +29,32 @@ extern "C"
 #include "beam_common.h"
 }
 
-static const Uint32 INTERNAL_HASH_SALT = 3432918353;
-static const Uint32 HCONST = 0x9E3779B9;
-
-/* ARG6 = lower 32
- * ARG7 = upper 32
+/* ARG2 = term
  *
- * Helper function for calculating the internal hash of keys before looking
- * them up in a map.
+ * Helper for calculating the internal hash of keys before looking them up in a
+ * map. This is a manual expansion of `erts_internal_hash`, and all changes to
+ * that function must be mirrored here.
  *
- * This is essentially just a manual expansion of the `UINT32_HASH_2` macro.
- * Whenever the internal hash algorithm is updated, this and all of its users
- * must follow suit.
- *
- * Result is returned in ARG3. All arguments are clobbered. */
+ * Result in ARG3. Clobbers TMP1. */
 void BeamGlobalAssembler::emit_internal_hash_helper() {
-    a64::Gp hash = ARG3.w(), lower = ARG6.w(), upper = ARG7.w(),
-            constant = ARG8.w();
+    a64::Gp key = ARG2, key_hash = ARG3;
 
-    mov_imm(hash, INTERNAL_HASH_SALT);
-    mov_imm(constant, HCONST);
+    /* key_hash = key ^ (key >> 33); */
+    a.eor(key_hash, key, key, arm::lsr(33));
 
-    a.add(lower, lower, constant);
-    a.add(upper, upper, constant);
+    /* key_hash *= 0xFF51AFD7ED558CCDull */
+    mov_imm(TMP1, 0xFF51AFD7ED558CCDull);
+    a.mul(key_hash, key_hash, TMP1);
 
-#if defined(ERL_INTERNAL_HASH_CRC32C)
-    a.crc32cw(lower, hash, lower);
-    a.add(hash, hash, lower);
-    a.crc32cw(hash, hash, upper);
-#else
-    using rounds =
-            std::initializer_list<std::tuple<a64::Gp, a64::Gp, a64::Gp, int>>;
-    for (const auto &round : rounds{{lower, upper, hash, 13},
-                                    {upper, hash, lower, -8},
-                                    {hash, lower, upper, 13},
-                                    {lower, upper, hash, 12},
-                                    {upper, hash, lower, -16},
-                                    {hash, lower, upper, 5},
-                                    {lower, upper, hash, 3},
-                                    {upper, hash, lower, -10},
-                                    {hash, lower, upper, 15}}) {
-        const auto &[r_a, r_b, r_c, shift] = round;
+    /* key_hash ^= key_hash >> 33; */
+    a.eor(key_hash, key_hash, key_hash, arm::lsr(33));
 
-        a.sub(r_a, r_a, r_b);
-        a.sub(r_a, r_a, r_c);
+    /* key_hash *= 0xC4CEB9FE1A85EC53ull */
+    mov_imm(TMP1, 0xC4CEB9FE1A85EC53ull);
+    a.mul(key_hash, key_hash, TMP1);
 
-        if (shift > 0) {
-            a.eor(r_a, r_a, r_c, arm::lsr(shift));
-        } else {
-            a.eor(r_a, r_a, r_c, arm::lsl(-shift));
-        }
-    }
-#endif
+    /* key_hash ^= key_hash >> 33; */
+    a.eor(key_hash, key_hash, key_hash, arm::lsr(33));
 
 #ifdef DBG_HASHMAP_COLLISION_BONANZA
     emit_enter_runtime_frame();
@@ -99,8 +73,6 @@ void BeamGlobalAssembler::emit_internal_hash_helper() {
     emit_leave_runtime();
     emit_leave_runtime_frame();
 #endif
-
-    a.ret(a64::x30);
 }
 
 /* ARG1 = untagged hash map root
@@ -112,7 +84,7 @@ void BeamGlobalAssembler::emit_internal_hash_helper() {
 void BeamGlobalAssembler::emit_hashmap_get_element() {
     Label node_loop = a.newLabel();
 
-    arm::Gp node = ARG1, key = ARG2, key_hash = ARG3, header_val = ARG4,
+    a64::Gp node = ARG1, key = ARG2, key_hash = ARG3, header_val = ARG4,
             depth = TMP5, index = TMP6;
 
     const int header_shift =
@@ -171,7 +143,7 @@ void BeamGlobalAssembler::emit_hashmap_get_element() {
          * word. */
         a.ldr(header_val, arm::Mem(node).post(sizeof(Eterm)));
 
-        /* After 8 nodes we've run out of the 32 bits we started with
+        /* After 8/16 nodes we've run out of the hash bits we've started with
          * and we end up in a collision node. */
         a.cmp(depth, imm(HAMT_MAX_LEVEL));
         a.b_ne(node_loop);
@@ -375,15 +347,9 @@ void BeamGlobalAssembler::emit_i_get_map_element_shared() {
 
     a.bind(hashmap);
     {
-        emit_enter_runtime_frame();
-
-        /* Calculate the internal hash of ARG2 before diving into the HAMT. */
-        a.mov(ARG6.w(), ARG2.w());
-        a.lsr(ARG7, ARG2, imm(32));
-        a.bl(labels[internal_hash_helper]);
-
-        emit_leave_runtime_frame();
-
+        /* Calculate the internal hash of the key before diving into the
+         * HAMT. */
+        emit_internal_hash_helper();
         emit_hashmap_get_element();
     }
 }
@@ -392,8 +358,10 @@ void BeamModuleAssembler::emit_i_get_map_element(const ArgLabel &Fail,
                                                  const ArgRegister &Src,
                                                  const ArgRegister &Key,
                                                  const ArgRegister &Dst) {
-    mov_arg(ARG1, Src);
-    mov_arg(ARG2, Key);
+    auto [src, key] = load_sources(Src, ARG1, Key, ARG2);
+
+    mov_var(ARG1, src);
+    mov_var(ARG2, key);
 
     if (maybe_one_of<BeamTypeId::MaybeImmediate>(Key)) {
         fragment_call(ga->get_i_get_map_element_shared());
@@ -527,7 +495,6 @@ void BeamGlobalAssembler::emit_i_get_map_element_hash_shared() {
     a.and_(TMP1, ARG4, imm(_HEADER_MAP_SUBTAG_MASK));
     a.cmp(TMP1, imm(HAMT_SUBTAG_HEAD_FLATMAP));
     a.b_ne(hashmap);
-
     emit_flatmap_get_element();
 
     a.bind(hashmap);
@@ -580,23 +547,44 @@ void BeamGlobalAssembler::emit_update_map_assoc_shared() {
     a.ret(a64::x30);
 }
 
+/* ARG2 = key
+ * ARG3 = value
+ * ARG4 = map
+ */
+void BeamGlobalAssembler::emit_update_map_single_assoc_shared() {
+    emit_enter_runtime_frame();
+    emit_enter_runtime<Update::eHeapAlloc>();
+
+    a.mov(ARG1, c_p);
+    runtime_call<4>(erts_maps_put);
+
+    emit_leave_runtime<Update::eHeapAlloc>();
+    emit_leave_runtime_frame();
+
+    a.ret(a64::x30);
+}
+
 void BeamModuleAssembler::emit_update_map_assoc(const ArgSource &Src,
                                                 const ArgRegister &Dst,
                                                 const ArgWord &Live,
                                                 const ArgWord &Size,
                                                 const Span<ArgVal> &args) {
-    auto src_reg = load_source(Src, TMP1);
-
     ASSERT(Size.get() == args.size());
 
-    embed_vararg_rodata(args, ARG5);
+    if (args.size() == 2) {
+        emit_load_args(args[0], ARG2, args[1], ARG3, Src, ARG4);
+        fragment_call(ga->get_update_map_single_assoc_shared());
+    } else {
+        auto src = load_source(Src, TMP1);
 
-    mov_arg(ArgXRegister(Live.get()), src_reg.reg);
-    mov_arg(ARG3, Live);
-    mov_imm(ARG4, args.size());
+        embed_vararg_rodata(args, ARG5);
 
-    fragment_call(ga->get_update_map_assoc_shared());
+        mov_arg(ArgXRegister(Live.get()), src.reg);
+        mov_arg(ARG3, Live);
+        mov_imm(ARG4, args.size());
 
+        fragment_call(ga->get_update_map_assoc_shared());
+    }
     mov_arg(Dst, ARG1);
 }
 
@@ -647,29 +635,67 @@ void BeamGlobalAssembler::emit_update_map_exact_body_shared() {
     }
 }
 
+/* ARG2 = key
+ * ARG3 = value
+ * ARG4 = map
+ *
+ * Does not return on error. */
+void BeamGlobalAssembler::emit_update_map_single_exact_body_shared() {
+    Label error = a.newLabel();
+
+    a.str(ARG2, TMP_MEM2q);
+
+    emit_enter_runtime_frame();
+    emit_enter_runtime<Update::eHeapAlloc>();
+
+    a.mov(ARG1, c_p);
+    lea(ARG5, TMP_MEM1q);
+    runtime_call<5>(erts_maps_update);
+
+    emit_leave_runtime<Update::eHeapAlloc>();
+    emit_leave_runtime_frame();
+
+    a.cbz(ARG1.w(), error);
+
+    a.ldr(ARG1, TMP_MEM1q);
+    a.ret(a64::x30);
+
+    a.bind(error);
+    {
+        a.ldr(TMP2, TMP_MEM2q);
+        mov_imm(TMP1, BADKEY);
+        ERTS_CT_ASSERT_FIELD_PAIR(Process, freason, fvalue);
+        a.stp(TMP1, TMP2, arm::Mem(c_p, offsetof(Process, freason)));
+        mov_imm(ARG4, 0);
+        a.b(labels[raise_exception]);
+    }
+}
+
 void BeamModuleAssembler::emit_update_map_exact(const ArgSource &Src,
                                                 const ArgLabel &Fail,
                                                 const ArgRegister &Dst,
                                                 const ArgWord &Live,
                                                 const ArgWord &Size,
                                                 const Span<ArgVal> &args) {
-    auto src_reg = load_source(Src, TMP1);
-
     ASSERT(Size.get() == args.size());
 
-    embed_vararg_rodata(args, ARG5);
-
-    /* We _KNOW_ Src is a map */
-
-    mov_arg(ArgXRegister(Live.get()), src_reg.reg);
-    mov_arg(ARG3, Live);
-    mov_imm(ARG4, args.size());
-
-    if (Fail.get() != 0) {
-        fragment_call(ga->get_update_map_exact_guard_shared());
-        emit_branch_if_not_value(ARG1, resolve_beam_label(Fail, dispUnknown));
+    if (args.size() == 2 && Fail.get() == 0) {
+        emit_load_args(args[0], ARG2, args[1], ARG3, Src, ARG4);
+        fragment_call(ga->get_update_map_single_exact_body_shared());
     } else {
-        fragment_call(ga->get_update_map_exact_body_shared());
+        auto src = load_source(Src, ARG4);
+        embed_vararg_rodata(args, ARG5);
+        mov_arg(ArgXRegister(Live.get()), src.reg);
+        mov_arg(ARG3, Live);
+        mov_imm(ARG4, args.size());
+
+        if (Fail.get() != 0) {
+            fragment_call(ga->get_update_map_exact_guard_shared());
+            emit_branch_if_not_value(ARG1,
+                                     resolve_beam_label(Fail, dispUnknown));
+        } else {
+            fragment_call(ga->get_update_map_exact_body_shared());
+        }
     }
 
     mov_arg(Dst, ARG1);

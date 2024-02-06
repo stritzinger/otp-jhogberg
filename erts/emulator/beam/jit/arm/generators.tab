@@ -343,31 +343,6 @@ gen.skip_utf16(Fail, Ms, Flags) {
     return op;
 }
 
-gen.allocate_heap_zero(Ns, Nh, Live) {
-    BeamOp* alloc;
-    BeamOp* init;
-    int i;
-
-    $NewBeamOp(S, alloc);
-    $NewBeamOp(S, init);
-
-    $BeamOpNameArity(alloc, allocate_heap, 3);
-    alloc->a[0] = Ns;
-    alloc->a[1] = Nh;
-    alloc->a[2] = Live;
-    alloc->next = init;
-
-    $BeamOpNameArity(init, init_yregs, 1);
-    $BeamOpArity(init, Ns.val+1);
-    init->a[0] = Ns;
-    for (i = 0; i < Ns.val; i++) {
-	init->a[i+1].type = TAG_y;
-	init->a[i+1].val = i;
-    }
-
-    return alloc;
-}
-
 gen.jump_tab(Src, Fail, Size, Rest) {
     Sint min, max;
     Sint i;
@@ -471,6 +446,21 @@ gen.func_end(Func_Label, Entry_Label) {
 
         op->next = NULL;
     }
+
+    return op;
+}
+
+gen.init_yregs_move(Size, Rest) {
+    BeamOp* op;
+
+    ASSERT(Size.val == 1);
+
+    $NewBeamOp(S, op);
+    $BeamOpNameArity(op, move, 2);
+    op->next = NULL;
+    op->a[0].type = TAG_n;
+    op->a[0].val = 0;
+    op->a[1] = Rest[0];
 
     return op;
 }

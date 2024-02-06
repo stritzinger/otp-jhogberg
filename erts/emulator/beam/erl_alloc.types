@@ -289,7 +289,7 @@ type    MAP_TRAP        SHORT_LIVED     PROCESSES       map_bif_trap_state
 
 type	ENVIRONMENT	SYSTEM		SYSTEM		environment
 
-type	PERSISTENT_TERM	LONG_LIVED	CODE		persisten_term
+type	PERSISTENT_TERM	LONG_LIVED	CODE		persistent_term
 type	PERSISTENT_LOCK_Q SHORT_LIVED	SYSTEM		persistent_lock_q
 type	PERSISTENT_TERM_TMP SHORT_LIVED	SYSTEM		persistent_term_tmp_table
 
@@ -308,6 +308,7 @@ type	T2B_DETERMINISTIC SHORT_LIVED	PROCESSES	term_to_binary_deterministic
 
 type    DSIG_HNDL_NTFY  SHORT_LIVED     PROCESSES       dirty_signal_handler_notification
 type    SCHD_SIG_NTFY   SHORT_LIVED     PROCESSES       scheduled_signal_notify
+type	CODE_COVERAGE   STANDARD        SYSTEM          code_coverage
 
 #
 # Types used for special emulators

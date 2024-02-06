@@ -18,7 +18,6 @@
 %% %CopyrightEnd%
 %%
 -module(ssl_dist_bench_SUITE).
--feature(maybe_expr, enable).
 
 -behaviour(ct_suite).
 
@@ -78,6 +77,7 @@ groups() ->
      {cryptcookie_socket_ktls, categories()},
      {dist_cryptcookie_inet,   categories()},
      {cryptcookie_inet_ktls,   categories()},
+     {cryptcookie_inet_ktls_ih, categories()},
      %%
      %% categories()
      {setup, [{repeat, 1}],
@@ -111,7 +111,8 @@ cryptcookie_backends() ->
     [{group, dist_cryptcookie_socket},
      {group, cryptcookie_socket_ktls},
      {group, dist_cryptcookie_inet},
-     {group, cryptcookie_inet_ktls}].
+     {group, cryptcookie_inet_ktls},
+     {group, cryptcookie_inet_ktls_ih}].
 
 categories() ->
     [{group, setup},
@@ -291,7 +292,22 @@ init_per_group(cryptcookie_inet_ktls, Config) ->
         ok ->
             [{ssl_dist, false}, {ssl_dist_prefix, "Crypto-Inet-kTLS"},
              {ssl_dist_args,
-              "-proto_dist inet_epmd -inet_epmd cryptcookie_inet_ktls"}
+              "-proto_dist inet_epmd -inet_epmd cryptcookie_inet_ktls "
+              "-inet_ktls port"}
+            | Config];
+        Problem ->
+            {skip, Problem}
+    catch
+        Class : Reason : Stacktrace ->
+            {fail, {Class, Reason, Stacktrace}}
+    end;
+init_per_group(cryptcookie_inet_ktls_ih, Config) ->
+    try inet_epmd_cryptcookie_inet_ktls:supported() of
+        ok ->
+            [{ssl_dist, false}, {ssl_dist_prefix, "Crypto-Inet-kTLS-IH"},
+             {ssl_dist_args,
+              "-proto_dist inet_epmd -inet_epmd cryptcookie_inet_ktls "
+              "-inet_ktls input_handler"}
             | Config];
         Problem ->
             {skip, Problem}
@@ -381,6 +397,9 @@ verify_node_src_addr() ->
     {ok,Socket} = gen_udp:open(0, [{active,false}]),
     {ok,Port} = inet:port(Socket),
     ok = gen_udp:send(Socket, DstAddr, Port, Msg),
+    %% Ubuntu has got 127.0.1.1 in /etc/hosts, but that IP address is
+    %% not assigned to the interface.
+    %% `ip addr add 127.0.1.1 dev lo` as root solves that problem
     case gen_udp:recv(Socket, length(Msg) + 1, 1000) of
         {ok,{DstAddr,Port,Msg}} ->
             ok;
@@ -524,7 +543,7 @@ set_cpu_affinity(Index) when is_integer(Index) ->
             Log = taskset(element(Index, split_cpus(CpuTopology))),
             %% Update Schedulers
             _ = erlang:system_info(update_cpu_info),
-            Schedulers = erlang:system_info(logical_processors_available),
+            Schedulers = erlang:system_info(schedulers_online),
             {Log,
              erlang:system_flag(schedulers_online, Schedulers),
              Schedulers}

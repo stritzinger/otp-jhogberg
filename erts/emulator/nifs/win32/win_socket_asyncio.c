@@ -3950,12 +3950,6 @@ ERL_NIF_TERM recv_check_ok(ErlNifEnv*       env,
                        ("WIN-ESAIO",
                         "recv_check_ok(%T, %d) -> complete success"
                         "\r\n", sockRef, descP->sock) );
-
-                /* This transfers "ownership" of the *allocated* binary to an
-                 * erlang term (no need for an explicit free).
-                 */
-                data = MKBIN(env, &opP->data.recv.buf);
-
             } else {
 
                 SSDBG( descP,
@@ -3963,13 +3957,12 @@ ERL_NIF_TERM recv_check_ok(ErlNifEnv*       env,
                         "recv_check_ok(%T, %d) -> partial (%d) success"
                         "\r\n", sockRef, descP->sock, read) );
 
-                /* This transfers "ownership" of the *allocated* binary to an
-                 * erlang term (no need for an explicit free).
-                 */
-                data = MKBIN(env, &opP->data.recv.buf);
-                data = MKSBIN(env, data, 0, read);
-
+                ESOCK_ASSERT( REALLOC_BIN(&opP->data.recv.buf, read) );
             }
+            /* This transfers "ownership" of the *allocated* binary to an
+             * erlang term (no need for an explicit free).
+             */
+            data = MKBIN(env, &opP->data.recv.buf);
 
             ESOCK_CNT_INC(env, descP, sockRef,
                           esock_atom_read_pkg, &descP->readPkgCnt, 1);
@@ -4367,18 +4360,13 @@ ERL_NIF_TERM recvfrom_check_ok(ErlNifEnv*       env,
                               opP->data.recvfrom.addrLen,
                               &eSockAddr);
 
-        if (read == opP->data.recvfrom.buf.size) {
-            /* This transfers "ownership" of the *allocated* binary to an
-             * erlang term (no need for an explicit free).
-             */
-            data = MKBIN(env, &opP->data.recvfrom.buf);
-        } else {
-            /* This transfers "ownership" of the *allocated* binary to an
-             * erlang term (no need for an explicit free).
-             */
-            data = MKBIN(env, &opP->data.recvfrom.buf);
-            data = MKSBIN(env, data, 0, read);
+        if (read != opP->data.recvfrom.buf.size) {
+            ESOCK_ASSERT( REALLOC_BIN(&opP->data.recvfrom.buf, read) );
         }
+        /* This transfers "ownership" of the *allocated* binary to an
+         * erlang term (no need for an explicit free).
+         */
+        data = MKBIN(env, &opP->data.recvfrom.buf);
 
         ESOCK_CNT_INC(env, descP, sockRef,
                       esock_atom_read_pkg, &descP->readPkgCnt, 1);
@@ -9050,11 +9038,11 @@ ERL_NIF_TERM esaio_completion_recv_partial_done(ErlNifEnv*       env,
     if (read > descP->readPkgMax)
         descP->readPkgMax = read;
 
+    ESOCK_ASSERT( REALLOC_BIN(&opDataP->buf, read) );
     /* This transfers "ownership" of the *allocated* binary to an
      * erlang term (no need for an explicit free).
      */
     data = MKBIN(opEnv, &opDataP->buf);
-    data = MKSBIN(opEnv, data, 0, read);
 
     (void) flags;
 
@@ -9792,11 +9780,11 @@ ERL_NIF_TERM esaio_completion_recvfrom_partial(ErlNifEnv*           env,
                           opDataP->addrLen,
                           &eSockAddr);
 
+    ESOCK_ASSERT( REALLOC_BIN(&opDataP->buf, read) );
     /* This transfers "ownership" of the *allocated* binary to an
      * erlang term (no need for an explicit free).
      */
     data = MKBIN(opEnv, &opDataP->buf);
-    data = MKSBIN(opEnv, data, 0, read);
 
     /* We ignore the flags *for now*.
      * Needs to be passed up eventually!

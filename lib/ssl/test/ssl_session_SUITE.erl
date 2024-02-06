@@ -755,14 +755,13 @@ client_hello(Random) ->
 		  random = Random,
 		  session_id = crypto:strong_rand_bytes(32),
 		  cipher_suites = CipherSuites,
-		  compression_methods = [0],
 		  extensions = Extensions
 		 }.
 
 connection_states(Random) ->
     #{current_write =>
           #{beast_mitigation => one_n_minus_one,cipher_state => undefined,
-		 client_verify_data => undefined,compression_state => undefined,
+		 client_verify_data => undefined,
 		 mac_secret => undefined,secure_renegotiation => undefined,
             security_parameters =>
                 #security_parameters{
@@ -775,7 +774,6 @@ connection_states(Random) ->
                    mac_algorithm = 0,
                    prf_algorithm = 0,
                    hash_size = 0,
-                   compression_algorithm = 0,
                    master_secret = undefined,
                    resumption_master_secret = undefined,
                    client_random = Random,

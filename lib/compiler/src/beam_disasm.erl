@@ -24,6 +24,7 @@
 %%=======================================================================
 
 -module(beam_disasm).
+-moduledoc false.
 
 -export([file/1]). %% the main function
 -export([function__code/1, format_error/1]).
@@ -1302,6 +1303,13 @@ resolve_inst({bs_match,[{Fail,Ctx,{z,1},{u,_},Args}]},_,_,_) ->
     List = resolve_args(Args),
     Commands = resolve_bs_match_commands(List),
     {bs_match,Fail,Ctx,{commands,Commands}};
+
+%%
+%% OTP 27.
+%%
+
+resolve_inst({executable_line,[Index]},_,_,_) ->
+    {line,resolve_arg(Index)};
 
 %%
 %% Catches instructions that are not yet handled.

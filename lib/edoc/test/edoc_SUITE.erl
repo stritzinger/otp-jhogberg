@@ -25,7 +25,7 @@
 %% Test cases
 -export([app/1,appup/1,build_std/1,build_map_module/1,otp_12008/1,
          build_app/1, otp_14285/1, infer_module_app_test/1,
-         module_with_feature/1]).
+         module_with_feature/1, module_with_maybe/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
@@ -137,7 +137,7 @@ otp_14285(Config) ->
     ok = edoc:files([Un2], Opts2),
     ok.
 
-infer_module_app_test(Config) ->
+infer_module_app_test(_Config) ->
     Modules = lists:map(fun ({M, _, _}) ->
 				{list_to_atom(M), M ++ ".beam"}
 			end, code:all_available()),
@@ -151,20 +151,24 @@ infer_module_app_test_({M, Beam}) ->
 	    %% When `App' is actually returned, the corresponding
 	    %% BEAM file is expected to be found on disk in the app's
 	    %% ebin dir.
-	    %% `preloaded' modules should be found under `erts/ebin'
-	    %% or under `erts/preloaded/ebin' in case of running tests
-	    %% from the source tree.
-	    BeamPath1 = filename:join([code:lib_dir(App), "ebin", Beam]),
-	    BeamPath2 = filename:join([code:lib_dir(App), "preloaded", "ebin", Beam]),
-	    R1 = filelib:is_regular(BeamPath1),
-	    R2 = filelib:is_regular(BeamPath2),
-	    R1 orelse R2
+	    BeamPath = filename:join([code:lib_dir(App), "ebin", Beam]),
+            filelib:is_regular(BeamPath)
     end.
 
 module_with_feature(Config) ->
     DataDir = ?config(data_dir, Config),
     PrivDir = ?config(priv_dir, Config),
     Source = filename:join(DataDir, "module_with_feature.erl"),
+    DodgerOpts = [{dir, PrivDir}],
+    ok = edoc:files([Source], DodgerOpts),
+    PreprocessOpts = [{preprocess, true}, {dir, PrivDir}],
+    ok = edoc:files([Source], PreprocessOpts),
+    ok.
+
+module_with_maybe(Config) ->
+    DataDir = ?config(data_dir, Config),
+    PrivDir = ?config(priv_dir, Config),
+    Source = filename:join(DataDir, "module_with_maybe.erl"),
     DodgerOpts = [{dir, PrivDir}],
     ok = edoc:files([Source], DodgerOpts),
     PreprocessOpts = [{preprocess, true}, {dir, PrivDir}],

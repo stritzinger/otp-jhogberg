@@ -50,12 +50,15 @@
 %%
 %%----------------------------------------------------------------------
 -module(cth_conn_log).
+-moduledoc false.
 
 -include("ct.hrl").
 
 -export([init/2,
 	 pre_init_per_testcase/4,
 	 post_end_per_testcase/5]).
+
+-behaviour(ct_hooks).
 
 %%----------------------------------------------------------------------
 %% Type declarations

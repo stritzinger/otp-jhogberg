@@ -165,45 +165,29 @@ erts_internal_beamfile_chunk_2(BIF_ALIST_2)
     IFF_Chunk chunk;
     IFF_File iff;
 
-    byte* temp_alloc;
-    byte* start;
-    Eterm Bin;
+    const byte *temp_alloc = NULL, *start;
+    Eterm binary;
+    Uint size;
     Eterm res;
 
     res = am_undefined;
-    temp_alloc = NULL;
-    Bin = BIF_ARG_1;
+    binary = BIF_ARG_1;
 
     if (!read_iff_list(BIF_ARG_2, &search_iff)) {
         BIF_ERROR(BIF_P, BADARG);
     }
 
-    if ((start = erts_get_aligned_binary_bytes(Bin, &temp_alloc)) == NULL) {
+    start = erts_get_aligned_binary_bytes(binary, &size, &temp_alloc);
+    if (start == NULL) {
         BIF_ERROR(BIF_P, BADARG);
     }
 
-    if (iff_init(start, binary_size(Bin), &iff)) {
+    if (iff_init(start, size, &iff)) {
         if (iff_read_chunk(&iff, search_iff, &chunk) && chunk.size > 0) {
-            Sint offset, bitoffs, bitsize;
-            Eterm real_bin;
-
-            ERTS_GET_REAL_BIN(Bin, real_bin, offset, bitoffs, bitsize);
-
-            if (bitoffs) {
-                res = new_binary(BIF_P, (byte*)chunk.data, chunk.size);
-            } else {
-                ErlSubBin *sb = (ErlSubBin*)HAlloc(BIF_P, ERL_SUB_BIN_SIZE);
-
-                sb->thing_word = HEADER_SUB_BIN;
-                sb->orig = real_bin;
-                sb->size = chunk.size;
-                sb->bitsize = 0;
-                sb->bitoffs = 0;
-                sb->offs = offset + (chunk.data - start);
-                sb->is_writable = 0;
-
-                res = make_binary(sb);
-            }
+            res = erts_make_sub_binary(BIF_P,
+                                       binary,
+                                       (chunk.data - start),
+                                       chunk.size);
         }
     }
 
@@ -216,22 +200,20 @@ erts_internal_beamfile_chunk_2(BIF_ALIST_2)
 BIF_RETTYPE
 erts_internal_beamfile_module_md5_1(BIF_ALIST_1)
 {
-    byte* temp_alloc;
-    byte* bytes;
-
+    const byte *temp_alloc = NULL, *bytes;
     BeamFile beam;
-    Eterm Bin;
+    Uint size;
     Eterm res;
 
-    temp_alloc = NULL;
-    Bin = BIF_ARG_1;
-
-    if ((bytes = erts_get_aligned_binary_bytes(Bin, &temp_alloc)) == NULL) {
+    bytes = erts_get_aligned_binary_bytes(BIF_ARG_1, &size, &temp_alloc);
+    if (bytes == NULL) {
         BIF_ERROR(BIF_P, BADARG);
     }
 
-    if (beamfile_read(bytes, binary_size(Bin), &beam) == BEAMFILE_READ_SUCCESS) {
-        res = new_binary(BIF_P, beam.checksum, sizeof(beam.checksum));
+    if (beamfile_read(bytes, size, &beam) == BEAMFILE_READ_SUCCESS) {
+        res = erts_new_binary_from_data(BIF_P,
+                                        sizeof(beam.checksum),
+                                        beam.checksum);
         beamfile_free(&beam);
     } else {
         res = am_undefined;
@@ -245,33 +227,34 @@ erts_internal_beamfile_module_md5_1(BIF_ALIST_1)
 BIF_RETTYPE
 erts_internal_prepare_loading_2(BIF_ALIST_2)
 {
-    byte* temp_alloc = NULL;
-    byte* code;
-    Uint sz;
+    const byte *temp_alloc = NULL, *code;
+    Uint size;
     Binary* magic;
     Eterm reason;
     Eterm* hp;
     Eterm res;
 
     if (is_not_atom(BIF_ARG_1)) {
-    error:
-	erts_free_aligned_binary_bytes(temp_alloc);
-	BIF_ERROR(BIF_P, BADARG);
+        BIF_ERROR(BIF_P, BADARG);
     }
-    if ((code = erts_get_aligned_binary_bytes(BIF_ARG_2, &temp_alloc)) == NULL) {
-	goto error;
+
+    code = erts_get_aligned_binary_bytes(BIF_ARG_2, &size, &temp_alloc);
+    if (code == NULL) {
+        BIF_ERROR(BIF_P, BADARG);
     }
 
     magic = erts_alloc_loader_state();
-    sz = binary_size(BIF_ARG_2);
     reason = erts_prepare_loading(magic, BIF_P, BIF_P->group_leader,
-				  &BIF_ARG_1, code, sz);
+                                  &BIF_ARG_1, code, size);
+
     erts_free_aligned_binary_bytes(temp_alloc);
+
     if (reason != NIL) {
-	hp = HAlloc(BIF_P, 3);
-	res = TUPLE2(hp, am_error, reason);
-	BIF_RET(res);
+        hp = HAlloc(BIF_P, 3);
+        res = TUPLE2(hp, am_error, reason);
+        BIF_RET(res);
     }
+
     hp = HAlloc(BIF_P, ERTS_MAGIC_REF_THING_SIZE);
     res = erts_mk_magic_ref(&hp, &MSO(BIF_P), magic);
     erts_refc_dec(&magic->intern.refc, 1);
@@ -1241,19 +1224,21 @@ any_heap_refs(Eterm* start, Eterm* end, char* mod_start, Uint mod_size)
 	    break;
 	case TAG_PRIMARY_HEADER:
 	    if (!header_is_transparent(val)) {
-		Eterm* new_p;
-                if (header_is_bin_matchstate(val)) {
-                    ErlBinMatchState *ms = (ErlBinMatchState*) p;
-                    ErlBinMatchBuffer *mb = &(ms->mb);
-                    if (ErtsInArea(mb->orig, mod_start, mod_size)) {
+                Eterm* new_p;
+
+                if (val == HEADER_SUB_BITS) {
+                    ErlSubBits *sb = (ErlSubBits*) p;
+
+                    if (ErtsInArea(sb->orig, mod_start, mod_size)) {
                         return 1;
                     }
                 }
-		new_p = p + thing_arityval(val);
-		ASSERT(start <= new_p && new_p < end);
-		p = new_p;
-	    }
-	}
+
+                new_p = p + thing_arityval(val);
+                ASSERT(start <= new_p && new_p < end);
+                p = new_p;
+            }
+        }
     }
     return 0;
 }
@@ -2073,6 +2058,7 @@ BIF_RETTYPE erts_internal_purge_module_2(BIF_ALIST_2)
                               modp->old.code_hdr->are_nifs);
                 }
 
+                beam_load_purge_aux(modp->old.code_hdr);
 #ifndef BEAMASM
                 erts_free(ERTS_ALC_T_CODE, (void *) modp->old.code_hdr);
 #else
@@ -2080,6 +2066,7 @@ BIF_RETTYPE erts_internal_purge_module_2(BIF_ALIST_2)
                 __lsan_unregister_root_region(modp->old.code_hdr,
                                               modp->old.code_length);
 #   endif
+                beamasm_unregister_metadata(modp->old.metadata);
                 beamasm_purge_module(modp->old.executable_region,
                                      modp->old.writable_region,
                                      modp->old.code_length);

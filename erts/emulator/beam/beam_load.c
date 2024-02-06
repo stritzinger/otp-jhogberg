@@ -97,12 +97,12 @@ Eterm
 erts_preload_module(Process *c_p,
                     ErtsProcLocks c_p_locks,
                     Eterm group_leader, /* Group leader or NIL if none. */
-                    Eterm* modp,        /*
+                    Eterm *modp,        /*
                                          * Module name as an atom (NIL to not
                                          * check). On return, contains the
                                          * actual module name.
                                          */
-                    byte* code,         /* Points to the code to load */
+                    const byte* code,   /* Points to the code to load */
                     Uint size)          /* Size of code to load. */
 {
     Binary* magic = erts_alloc_loader_state();
@@ -121,7 +121,7 @@ erts_preload_module(Process *c_p,
 
 Eterm
 erts_prepare_loading(Binary* magic, Process *c_p, Eterm group_leader,
-                     Eterm* modp, byte* code, Uint unloaded_size)
+                     Eterm* modp, const byte *code, Uint unloaded_size)
 {
     enum beamfile_read_result read_result;
     Eterm retval = am_badfile;
@@ -188,6 +188,26 @@ erts_prepare_loading(Binary* magic, Process *c_p, Eterm group_leader,
                        "  (Use of opcode %d; this emulator supports "
                        "only up to %d.)",
                        stp->beam.code.max_opcode, MAX_GENERIC_OPCODE);
+    } else if (stp->beam.code.max_opcode < genop_swap_2) {
+        /*
+         * This BEAM file was produced by OTP 22 or earlier.
+         *
+         * We know that because OTP 23/24/25/26 artifically set the
+         * highest used op code to the op code for the `swap`
+         * instruction introduced in OTP 23. (OTP 27 artificially sets
+         * the highest op code to `make_fun3` introduced in OTP 24.)
+         *
+         * Old BEAM files produced by OTP R12 and earlier may be
+         * incompatible with the current runtime system. We used to
+         * reject such BEAM files using transformation rules that
+         * specifically targeted the known problematic constructs, but
+         * rejecting them this way is much easier.
+         */
+        BeamLoadError0(stp,
+                       "This BEAM file was compiled for an old version of "
+                       "the runtime system.\n"
+                       "  To fix this, please re-compile this module with "
+                       "Erlang/OTP 24 or later.\n");
     }
 
     if (!load_code(stp)) {
@@ -417,7 +437,7 @@ static int load_code(LoaderState* stp)
 
     do_transform:
         ASSERT(stp->genop != NULL);
-        if (gen_opc[stp->genop->op].transform != -1) {
+        if (gen_opc[stp->genop->op].transform) {
             if (stp->genop->next == NULL) {
                 /*
                  * Simple heuristic: Most transformations requires
@@ -556,8 +576,6 @@ static int load_code(LoaderState* stp)
                  * error message.
                  */
                 switch (stp->genop->op) {
-                case genop_too_old_compiler_0:
-                    BeamLoadError0(stp, PLEASE_RECOMPILE);
                 case genop_unsupported_guard_bif_3:
                     {
                         Eterm Mod = (Eterm) stp->genop->a[0].val;
@@ -638,22 +656,27 @@ erts_release_literal_area(ErtsLiteralArea* literal_area)
 
     while (oh) {
         switch (thing_subtag(oh->thing_word)) {
-        case REFC_BINARY_SUBTAG:
+        case BIN_REF_SUBTAG:
             {
-                Binary* bptr = ((ProcBin*)oh)->val;
-                erts_bin_release(bptr);
+                Binary *bin = ((BinRef*)oh)->val;
+                erts_bin_release(bin);
                 break;
             }
-        case FUN_SUBTAG:
+        case FUN_REF_SUBTAG:
             {
-                /* We _KNOW_ that this is a local fun, otherwise it would not
-                 * be part of the off-heap list. */
-                ErlFunEntry* fe = ((ErlFunThing*)oh)->entry.fun;
+                ErlFunEntry* fe = ((FunRef*)oh)->entry;
 
-                ASSERT(is_local_fun((ErlFunThing*)oh));
-
-                if (erts_refc_dectest(&fe->refc, 0) == 0) {
-                    erts_erase_fun_entry(fe);
+                /* All fun entries are NULL during module loading, before the
+                 * code is finalized, so we need to tolerate it to avoid
+                 * crashing in the prepared code destructor.
+                 *
+                 * Strictly speaking it would be nice to crash when we see this
+                 * outside of loading, but it's too complicated to keep track
+                 * of whether we are. */
+                if (fe != NULL) {
+                    if (erts_refc_dectest(&fe->refc, 0) == 0) {
+                        erts_erase_fun_entry(fe);
+                    }
                 }
                 break;
             }

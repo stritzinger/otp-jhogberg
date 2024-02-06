@@ -204,44 +204,25 @@ void BeamModuleAssembler::emit_bif_bit_size(const ArgWord &Bif,
         return;
     }
 
+    comment("inlined bit_size/1 because its argument is always a bitstring");
     mov_arg(ARG2, Src);
-
-    auto unit = getSizeUnit(Src);
-    bool is_bitstring = unit == 0 || std::gcd(unit, 8) != 8;
     x86::Gp boxed_ptr = emit_ptr_val(ARG2, ARG2);
 
-    if (is_bitstring) {
-        comment("inlined bit_size/1 because "
-                "its argument is a bitstring");
-    } else {
-        comment("inlined and simplified bit_size/1 because "
-                "its argument is a binary");
-    }
-
-    if (is_bitstring) {
-        a.mov(RETd, emit_boxed_val(boxed_ptr, 0, sizeof(Uint32)));
-    }
-
+    ERTS_CT_ASSERT(offsetof(ErlHeapBits, size) == sizeof(Eterm));
     a.mov(ARG1, emit_boxed_val(boxed_ptr, sizeof(Eterm)));
-    a.shl(ARG1, imm(3 + _TAG_IMMED1_SIZE));
 
-    if (is_bitstring) {
-        Label not_sub_bin = a.newLabel();
-        const auto diff_mask = _TAG_HEADER_SUB_BIN - _TAG_HEADER_REFC_BIN;
-        ERTS_CT_ASSERT((_TAG_HEADER_SUB_BIN & diff_mask) != 0 &&
-                       (_TAG_HEADER_REFC_BIN & diff_mask) == 0 &&
-                       (_TAG_HEADER_HEAP_BIN & diff_mask) == 0);
-        a.test(RETb, imm(diff_mask));
-        a.short_().jz(not_sub_bin);
-
-        a.mov(RETb, emit_boxed_val(boxed_ptr, offsetof(ErlSubBin, bitsize), 1));
-        a.shl(RETb, imm(_TAG_IMMED1_SIZE));
-        a.add(ARG1.r8(), RETb);
-
-        a.bind(not_sub_bin);
+    Label not_sub_bits = a.newLabel();
+    a.cmp(emit_boxed_val(boxed_ptr), imm(HEADER_SUB_BITS));
+    a.short_().jne(not_sub_bits);
+    {
+        a.mov(ARG1, emit_boxed_val(boxed_ptr, offsetof(ErlSubBits, end)));
+        a.sub(ARG1, emit_boxed_val(boxed_ptr, offsetof(ErlSubBits, start)));
     }
+    a.bind(not_sub_bits);
 
+    a.shl(ARG1, imm(_TAG_IMMED1_SIZE));
     a.or_(ARG1, imm(_TAG_IMMED1_SMALL));
+
     mov_arg(Dst, ARG1);
 }
 
@@ -260,46 +241,27 @@ void BeamModuleAssembler::emit_bif_byte_size(const ArgWord &Bif,
         return;
     }
 
+    comment("inlined byte_size/1 because its argument is always a bitstring");
     mov_arg(ARG2, Src);
-
-    auto unit = getSizeUnit(Src);
-    bool is_bitstring = unit == 0 || std::gcd(unit, 8) != 8;
     x86::Gp boxed_ptr = emit_ptr_val(ARG2, ARG2);
 
-    if (is_bitstring) {
-        comment("inlined byte_size/1 because "
-                "its argument is a bitstring");
-    } else {
-        comment("inlined and simplified byte_size/1 because "
-                "its argument is a binary");
+    ERTS_CT_ASSERT(offsetof(ErlHeapBits, size) == sizeof(Eterm));
+    a.mov(ARG1, emit_boxed_val(boxed_ptr, offsetof(ErlHeapBits, size)));
+
+    Label not_sub_bits = a.newLabel();
+    a.cmp(emit_boxed_val(boxed_ptr), imm(HEADER_SUB_BITS));
+    a.short_().jne(not_sub_bits);
+    {
+        a.mov(ARG1, emit_boxed_val(boxed_ptr, offsetof(ErlSubBits, end)));
+        a.sub(ARG1, emit_boxed_val(boxed_ptr, offsetof(ErlSubBits, start)));
     }
+    a.bind(not_sub_bits);
 
-    if (is_bitstring) {
-        a.mov(RETd, emit_boxed_val(boxed_ptr, 0, sizeof(Uint32)));
-    }
-
-    a.mov(ARG1, emit_boxed_val(boxed_ptr, sizeof(Eterm)));
-
-    if (is_bitstring) {
-        Label not_sub_bin = a.newLabel();
-        const auto diff_mask = _TAG_HEADER_SUB_BIN - _TAG_HEADER_REFC_BIN;
-        ERTS_CT_ASSERT((_TAG_HEADER_SUB_BIN & diff_mask) != 0 &&
-                       (_TAG_HEADER_REFC_BIN & diff_mask) == 0 &&
-                       (_TAG_HEADER_HEAP_BIN & diff_mask) == 0);
-        a.test(RETb, imm(diff_mask));
-        a.short_().jz(not_sub_bin);
-
-        a.mov(RETb, emit_boxed_val(boxed_ptr, offsetof(ErlSubBin, bitsize), 1));
-        a.test(RETb, RETb);
-        a.setne(RETb);
-        a.movzx(RETd, RETb);
-        a.add(ARG1, RET);
-
-        a.bind(not_sub_bin);
-    }
-
-    a.shl(ARG1, imm(_TAG_IMMED1_SIZE));
+    /* Round up to the nearest byte. */
+    a.add(ARG1, imm(7));
+    a.shl(ARG1, imm(_TAG_IMMED1_SIZE - 3));
     a.or_(ARG1, imm(_TAG_IMMED1_SMALL));
+
     mov_arg(Dst, ARG1);
 }
 
@@ -778,9 +740,13 @@ void BeamModuleAssembler::emit_bif_map_size(const ArgLabel &Fail,
     a.bind(good_map);
     {
         ERTS_CT_ASSERT(offsetof(flatmap_t, size) == sizeof(Eterm));
-        a.mov(RET, emit_boxed_val(boxed_ptr, sizeof(Eterm)));
-        a.shl(RET, imm(4));
-        a.or_(RETb, imm(_TAG_IMMED1_SMALL));
+        preserve_cache(
+                [&]() {
+                    a.mov(RET, emit_boxed_val(boxed_ptr, sizeof(Eterm)));
+                    a.shl(RET, imm(4));
+                    a.or_(RETb, imm(_TAG_IMMED1_SMALL));
+                },
+                RET);
         mov_arg(Dst, RET);
     }
 }

@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(group).
+-moduledoc false.
 
 %% A group leader process for user io.
 %% This process receives input data from user_drv in this format
@@ -526,16 +527,18 @@ get_chars_apply(Pbs, M, F, Xa, Drv, Shell, Buf, State0, LineCont, Encoding) ->
         {stop,Result,Rest} ->
             %% Prompt was valid expression, clear the prompt in user_drv
             %% First redraw without the multi line prompt
+            FormattedLine = format_expression(LineCont, Drv),
             case LineCont of
-                {[CL|LB], _, _} ->
-                    LineCont1 = {LB,{lists:reverse(CL++"\n"), []},[]},
-                    MultiLinePrompt = lists:duplicate(prim_tty:npwcwidthstring(Pbs), $\s),
+                {[_|_], _, _} ->
+                    [CL1|LB1] = lists:reverse(string:split(FormattedLine, "\n", all)),
+                    LineCont1 = {LB1,{lists:reverse(CL1++"\n"), []},[]},
+                    MultiLinePrompt = lists:duplicate(shell:prompt_width(Pbs), $\s),
                     send_drv_reqs(Drv, [{redraw_prompt, Pbs, MultiLinePrompt, LineCont1},new_prompt]);
                 _ -> skip %% oldshell mode
             end,
             _ = case {M,F} of
                     {io_lib, get_until} ->
-                        save_line_buffer(string:trim(Line, both)++"\n", get_lines(new_stack(get(line_buffer))));
+                        save_line_buffer(string:trim(FormattedLine, both)++"\n", get_lines(new_stack(get(line_buffer))));
                     _ ->
                         skip
                 end,
@@ -605,8 +608,15 @@ get_line1({open_editor, _Cs, Cont, Rs}, Drv, Shell, Ls0, Encoding) ->
             send_drv_reqs(Drv, NewRs),
             get_line1(edlin:edit_line(Cs1, NewCont), Drv, Shell, Ls0, Encoding)
     end;
+get_line1({format_expression, _Cs, {line, _, _, _} = Cont, Rs}, Drv, Shell, Ls, Encoding) ->
+    send_drv_reqs(Drv, Rs),
+    Cs1 = format_expression(Cont, Drv),
+    send_drv_reqs(Drv, edlin:erase_line()),
+    {more_chars,NewCont,NewRs} = edlin:start(edlin:prompt(Cont)),
+    send_drv_reqs(Drv, NewRs),
+    get_line1(edlin:edit_line(Cs1, NewCont), Drv, Shell, Ls, Encoding);
 %% Move Up, Down in History: Ctrl+P, Ctrl+N
-get_line1({history_up,Cs,Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
+get_line1({history_up,Cs,{_,_,_,Mode0}=Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
     send_drv_reqs(Drv, Rs),
     case up_stack(save_line(Ls0, edlin:current_line(Cont))) of
         {none,_Ls} ->
@@ -614,7 +624,8 @@ get_line1({history_up,Cs,Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
             get_line1(edlin:edit_line(Cs, Cont), Drv, Shell, Ls0, Encoding);
         {Lcs,Ls} ->
             send_drv_reqs(Drv, edlin:erase_line()),
-            {more_chars,Ncont,Nrs} = edlin:start(edlin:prompt(Cont)),
+            {more_chars,{A,B,C,_},Nrs} = edlin:start(edlin:prompt(Cont)),
+            Ncont = {A,B,C,Mode0},
             send_drv_reqs(Drv, Nrs),
             get_line1(
               edlin:edit_line1(
@@ -623,7 +634,7 @@ get_line1({history_up,Cs,Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
                 Ncont),
               Drv, Shell, Ls, Encoding)
     end;
-get_line1({history_down,Cs,Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
+get_line1({history_down,Cs,{_,_,_,Mode0}=Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
     send_drv_reqs(Drv, Rs),
     case down_stack(save_line(Ls0, edlin:current_line(Cont))) of
         {none,_Ls} ->
@@ -631,7 +642,8 @@ get_line1({history_down,Cs,Cont,Rs}, Drv, Shell, Ls0, Encoding) ->
             get_line1(edlin:edit_line(Cs, Cont), Drv, Shell, Ls0, Encoding);
         {Lcs,Ls} ->
             send_drv_reqs(Drv, edlin:erase_line()),
-            {more_chars,Ncont,Nrs} = edlin:start(edlin:prompt(Cont)),
+            {more_chars,{A,B,C,_},Nrs} = edlin:start(edlin:prompt(Cont)),
+            Ncont = {A,B,C,Mode0},
             send_drv_reqs(Drv, Nrs),
             get_line1(edlin:edit_line1(string:to_graphemes(lists:sublist(Lcs,
                                                                          1,
@@ -658,7 +670,44 @@ get_line1({search,Cs,Cont,Rs}, Drv, Shell, Ls, Encoding) ->
     put(search_quit_prompt, Cont),
     Pbs = prompt_bytes("\033[;1;4msearch:\033[0m ", Encoding),
     {more_chars,Ncont,_Nrs} = edlin:start(Pbs, {search,none}),
+    put(search, new_search),
     get_line1(edlin:edit_line1(Cs, Ncont), Drv, Shell, Ls, Encoding);
+get_line1({help, Before, Cs0, Cont, Rs}, Drv, Shell, Ls0, Encoding) ->
+    send_drv_reqs(Drv, Rs),
+    {_,Word,_} = edlin:over_word(Before, [], 0),
+    {R,Docs} = case edlin_context:get_context(Before) of
+        {function, Mod} when Word =/= [] -> try
+                    {ok, [{atom,_,Module}], _} = erl_scan:string(Mod),
+                    {ok, [{atom,_,Word1}], _} = erl_scan:string(Word),
+                    {function, c:h1(Module, Word1)}
+                catch _:_ ->
+                    {ok, [{atom,_,Module1}], _} = erl_scan:string(Mod),
+                    {module, c:h1(Module1)}
+                end;
+        {function, Mod} ->
+            {ok, [{atom,_,Module}], _} = erl_scan:string(Mod),
+            {module, c:h1(Module)};
+        {function, Mod, Fun, _Args, _Unfinished, _Nesting} ->
+            {ok, [{atom,_,Module}], _} = erl_scan:string(Mod),
+            {ok, [{atom,_,Function}], _} = erl_scan:string(Fun),
+            {function, c:h1(Module, Function)};
+        {term, _, {atom, Word1}}->
+            {ok, [{atom,_,Module}], _} = erl_scan:string(Word1),
+            {module, c:h1(Module)};
+        _ -> {error, {error, no_help}}
+    end,
+    case {R, Docs} of
+        {_, {error, _}} -> send_drv(Drv, beep);
+        {module, _} ->
+                Docs1 = "  "++string:trim(lists:nthtail(3, Docs),both),
+                send_drv(Drv, {put_expand, unicode,
+                    [unicode:characters_to_binary(Docs1)], 7});
+        {function, _} ->
+                Docs1 = "  "++string:trim(Docs,both),
+                send_drv(Drv, {put_expand, unicode,
+                    [unicode:characters_to_binary(Docs1)], 7})
+    end,
+    get_line1(edlin:edit_line(Cs0, Cont), Drv, Shell, Ls0, Encoding);
 get_line1({Expand, Before, Cs0, Cont,Rs}, Drv, Shell, Ls0, Encoding)
   when Expand =:= expand; Expand =:= expand_full ->
     send_drv_reqs(Drv, Rs),
@@ -680,34 +729,14 @@ get_line1({Expand, Before, Cs0, Cont,Rs}, Drv, Shell, Ls0, Encoding)
              {Cs1, _} when Cs1 =/= [] -> Cs1;
              _ ->
                  NlMatchStr = unicode:characters_to_binary("\n"++MatchStr),
+                 NLines = case Expand of
+                                expand -> 7;
+                                expand_full -> 0
+                            end,
                  case get(expand_below) of
                      true ->
-                         Lines = string:split(string:trim(MatchStr), "\n", all),
-                         NoLines = length(Lines),
-                         if NoLines > 5, Expand =:= expand ->
-                                 %% Only show 5 lines to start with
-                                 [L1,L2,L3,L4,L5|_] = Lines,
-                                 String = lists:join(
-                                            $\n,
-                                            [L1,L2,L3,L4,L5,
-                                             io_lib:format("Press tab to see all ~p expansions",
-                                                           [edlin_expand:number_matches(Matches)])]),
-                                 send_drv(Drv, {put_expand, unicode,
-                                                unicode:characters_to_binary(String)}),
-                                 Cs1;
-                            true ->
-                                 case get_tty_geometry(Drv) of
-                                     {_, Rows} when Rows > NoLines ->
-                                         %% If all lines fit on screen, we expand below
-                                         send_drv(Drv, {put_expand, unicode, NlMatchStr}),
-                                         Cs1;
-                                     _ ->
-                                         %% If there are more results than fit on
-                                         %% screen we expand above
-                                         send_drv_reqs(Drv, [{put_chars, unicode, NlMatchStr}]),
-                                         [$\e, $l | Cs1]
-                                 end
-                         end;
+                        send_drv(Drv, {put_expand, unicode, unicode:characters_to_binary(string:trim(MatchStr, trailing)), NLines}),
+                        Cs1;
                      false ->
                          send_drv(Drv, {put_chars, unicode, NlMatchStr}),
                          [$\e, $l | Cs1]
@@ -755,42 +784,49 @@ get_line1({search_cancel,_Cs,_,Rs}, Drv, Shell, Ls, Encoding) ->
     send_drv_reqs(Drv, edlin:redraw_line(NCont)),
     get_line1({more_chars, NCont, []}, Drv, Shell, Ls, Encoding);
 %% Search mode is entered.
-get_line1({What,{line,Prompt,{_,{RevCmd0,_},_},{search, none}},_Rs},
+get_line1({What,{line,Prompt,{_,{RevCmd0,_},_},{search, none}}=Cont0,Rs},
           Drv, Shell, Ls0, Encoding) ->
     %% Figure out search direction. ^S and ^R are returned through edlin
     %% whenever we received a search while being already in search mode.
+    OldSearch = get(search),
     {Search, Ls1, RevCmd} = case RevCmd0 of
                                 [$\^S|RevCmd1] ->
                                     {fun search_down_stack/2, Ls0, RevCmd1};
                                 [$\^R|RevCmd1] ->
                                     {fun search_up_stack/2, Ls0, RevCmd1};
-                                _ -> % new search, rewind stack for a proper search.
-                                    {fun search_up_stack/2, new_stack(get_lines(Ls0)), RevCmd0}
+                                _ when RevCmd0 =/= OldSearch -> % new search, rewind stack for a proper search.
+                                    {fun search_up_stack/2, new_stack(get_lines(Ls0)), RevCmd0};
+                                _ ->
+                                    {skip, Ls0, RevCmd0}
                             end,
+    put(search, RevCmd),
     Cmd = lists:reverse(RevCmd),
-    {Ls, NewStack} = case Search(Ls1, Cmd) of
-                         {none, Ls2} ->
-                             send_drv(Drv, beep),
-                             put(search_result, []),
-                             send_drv(Drv, delete_line),
-                             send_drv(Drv, {insert_chars, unicode, unicode:characters_to_binary(Prompt++Cmd)}),
-                             {Ls2, {[],{RevCmd, []},[]}};
-                         {Line, Ls2} -> % found. Complete the output edlin couldn't have done.
-                             Lines = string:split(string:to_graphemes(Line), "\n", all),
-                             Output = if length(Lines) > 5 ->
-                                            [A,B,C,D,E|_]=Lines,
-                                            (["\n  " ++ Line1 || Line1 <- [A,B,C,D,E]] ++
-                                                [io_lib:format("~n  ... (~w lines omitted)",[length(Lines)-5])]);
-                                         true -> ["\n  " ++ Line1 || Line1 <- Lines]
-                                      end,
-                             put(search_result, Lines),
-                             send_drv(Drv, delete_line),
-                             send_drv(Drv, {insert_chars, unicode, unicode:characters_to_binary(Prompt++Cmd)}),
-                             send_drv(Drv, {put_expand_no_trim, unicode, unicode:characters_to_binary(Output)}),
-                             {Ls2, {[],{RevCmd, []},[]}}
-                     end,
-    Cont = {line,Prompt,NewStack,{search, none}},
-    more_data(What, Cont, Drv, Shell, Ls, Encoding);
+    if Search =:= skip ->
+        %% Move expand are the only valid requests to bypass search mode
+        %% Sending delete_chars, insert_chars, etc. will result in
+        %% expand area being cleared.
+        Rs1 = [R||{move_expand,_}=R<-Rs],
+        send_drv_reqs(Drv, Rs1),
+        more_data(What, Cont0, Drv, Shell, Ls0, Encoding);
+       true ->
+        {Ls, NewStack} = case Search(Ls1, Cmd) of
+            {none, Ls2} ->
+                send_drv(Drv, beep),
+                put(search_result, []),
+                send_drv(Drv, delete_line),
+                send_drv(Drv, {insert_chars, unicode, unicode:characters_to_binary(Prompt++Cmd)}),
+                {Ls2, {[],{RevCmd, []},[]}};
+            {Line, Ls2} -> % found. Complete the output edlin couldn't have done.
+                Lines = string:split(string:to_graphemes(Line), "\n", all),
+                put(search_result, Lines),
+                send_drv(Drv, delete_line),
+                send_drv(Drv, {insert_chars, unicode, unicode:characters_to_binary(Prompt++Cmd)}),
+                send_drv(Drv, {put_expand, unicode, unicode:characters_to_binary("  "++lists:join("\n  ",Lines)), 7}),
+                {Ls2, {[],{RevCmd, []},[]}}
+        end,
+        Cont = {line,Prompt,NewStack,{search, none}},
+        more_data(What, Cont, Drv, Shell, Ls, Encoding)
+    end;
 get_line1({What,Cont0,Rs}, Drv, Shell, Ls, Encoding) ->
     send_drv_reqs(Drv, Rs),
     more_data(What, Cont0, Drv, Shell, Ls, Encoding).
@@ -897,6 +933,45 @@ get_chars_echo_off1(Drv, Shell) ->
         {'EXIT',Shell,R} ->
             exit(R)
     end.
+
+format_expression(Cont, Drv) ->
+    FormatingCommand = application:get_env(stdlib, format_shell_func, default),
+    Buffer = edlin:current_line(Cont),
+    try
+        case FormatingCommand of
+            default ->
+                string:trim(Buffer, trailing, "\n");
+            {M,F} when is_atom(M), is_atom(F) ->
+                M:F(Buffer);
+            FormatingCommand1 when is_list(FormatingCommand1) ->
+                format_expression1(Buffer, FormatingCommand1)
+        end
+    catch _:_ ->
+            send_drv_reqs(Drv, [{put_chars, unicode, io_lib:format("* Bad format function: ~tp~n", [FormatingCommand])}]),
+            _ = shell:format_shell_func(default),
+            string:trim(Buffer, trailing, "\n")
+    end.
+format_expression1(Buffer, FormatingCommand) ->
+    %% Write the current expression to a file, format it with a formatting tool
+    %% provided by the user and read the file back
+    MkTemp = case os:type() of
+        {win32, _} ->
+            os:cmd("powershell \"write-host (& New-TemporaryFile | Select-Object -ExpandProperty FullName)\"");
+        {unix,_} ->
+            os:cmd("mktemp")
+    end,
+    TmpFile = string:chomp(MkTemp) ++ ".erl",
+    _ = file:write_file(TmpFile, unicode:characters_to_binary(Buffer, unicode)),
+    FormattingCommand1 = string:replace(FormatingCommand, "${file}", TmpFile),
+    _ = os:cmd(FormattingCommand1),
+    {ok, Content} = file:read_file(TmpFile),
+    _ = file:del_dir_r(TmpFile),
+    Unicode = case unicode:characters_to_list(Content,unicode) of
+                  {error, _, _} -> unicode:characters_to_list(
+                                     unicode:characters_to_list(Content,latin1), unicode);
+                  U -> U
+              end,
+    string:chomp(Unicode).
 
 %% We support line editing for the ICANON mode except the following
 %% line editing characters, which already has another meaning in

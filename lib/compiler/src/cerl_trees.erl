@@ -14,12 +14,16 @@
 %% @author Richard Carlsson <carlsson.richard@gmail.com>
 %% @doc Basic functions on Core Erlang abstract syntax trees.
 %%
-%% <p>Syntax trees are defined in the module <a
-%% href="cerl"><code>cerl</code></a>.</p>
+%% <p>Syntax trees are defined in the module {@link cerl}.</p>
 %%
 %% @type cerl() = cerl:cerl()
 
 -module(cerl_trees).
+-moduledoc """
+Basic functions on Core Erlang abstract syntax trees.
+
+Syntax trees are defined in the module `m:cerl`.
+""".
 
 -export([depth/1, fold/3, free_variables/1, get_label/1, label/1, label/2, 
 	 map/2, mapfold/3, mapfold/4, next_free_variable_name/1,
@@ -63,6 +67,7 @@
 	       update_c_map_pair/4
 	   ]).
 
+-type cerl() :: cerl:cerl().
 
 %% ---------------------------------------------------------------------
 
@@ -72,7 +77,11 @@
 %% node has depth zero, the tree representing "<code>{foo,
 %% bar}</code>" has depth one, etc.
 
--spec depth(cerl:cerl()) -> non_neg_integer().
+-doc """
+Returns the length of the longest path in the tree. A leaf node has depth zero,
+the tree representing "`{foo, bar}`" has depth one, etc.
+""".
+-spec depth(cerl()) -> non_neg_integer().
 
 depth(T) ->
     case subtrees(T) of
@@ -91,7 +100,8 @@ depth_1(Ts) ->
 %%
 %% @doc Returns the number of nodes in <code>Tree</code>.
 
--spec size(cerl:cerl()) -> non_neg_integer().
+-doc "Returns the number of nodes in `Tree`.".
+-spec size(cerl()) -> non_neg_integer().
 
 size(T) ->
     fold(fun (_, S) -> S + 1 end, 0, T).
@@ -109,7 +119,13 @@ size(T) ->
 %%
 %% @see mapfold/3
 
--spec map(fun((cerl:cerl()) -> cerl:cerl()), cerl:cerl()) -> cerl:cerl().
+-doc """
+Maps a function onto the nodes of a tree. This replaces each node in the tree by
+the result of applying the given function on the original node, bottom-up.
+
+_See also: _`mapfold/3`.
+""".
+-spec map(fun((cerl()) -> cerl()), cerl()) -> cerl().
 
 map(F, T) ->
     F(map_1(F, T)).
@@ -225,7 +241,14 @@ map_pairs(_, []) ->
 %%
 %% @see mapfold/3
 
--spec fold(fun((cerl:cerl(), term()) -> term()), term(), cerl:cerl()) -> term().
+-doc """
+Does a fold operation over the nodes of the tree. The result is the value of
+`Function(X1, Function(X2, ... Function(Xn, Unit) ... ))`, where `X1, ..., Xn`
+are the nodes of `Tree` in a post-order traversal.
+
+_See also: _`mapfold/3`.
+""".
+-spec fold(fun((cerl(), term()) -> term()), term(), cerl()) -> term().
 
 fold(F, S, T) ->
     F(T, fold_1(F, S, T)).
@@ -348,8 +371,18 @@ fold_pairs(_, S, []) ->
 %% @see fold/3
 %% @see mapfold/4
 
--spec mapfold(fun((cerl:cerl(), term()) -> {cerl:cerl(), term()}),
-	      term(), cerl:cerl()) -> {cerl:cerl(), term()}.
+-doc """
+Does a combined map/fold operation on the nodes of the tree. This is similar to
+[`map/2`](`map/2`), but also propagates a value from each application of
+`Function` to the next, starting with the given value `Initial`, while doing a
+post-order traversal of the tree, much like [`fold/3`](`fold/3`).
+
+This is the same as mapfold/4, with an identity function as the pre-operation.
+
+_See also: _`fold/3`, `map/2`, `mapfold/4`.
+""".
+-spec mapfold(fun((cerl(), term()) -> {cerl(), term()}),
+	      term(), cerl()) -> {cerl(), term()}.
 
 mapfold(F, S0, T) ->
   mapfold(fun(T0, A) -> {T0, A} end, F, S0, T).
@@ -373,9 +406,22 @@ mapfold(F, S0, T) ->
 %% If <code>skip</code> is returned, it returns the tree and accumulator
 %% as is.
 
--spec mapfold(fun((cerl:cerl(), term()) -> {cerl:cerl(), term()} | skip),
-              fun((cerl:cerl(), term()) -> {cerl:cerl(), term()}),
-	      term(), cerl:cerl()) -> {cerl:cerl(), term()}.
+-doc """
+Does a combined map/fold operation on the nodes of the tree. It begins by
+calling `Pre` on the tree, using the `Initial` value. `Pre` must either return a
+tree with an updated accumulator or the atom `skip`.
+
+If a tree is returned, this function deconstructs the top node of the returned
+tree and recurses on the children, using the returned value as the new initial
+and carrying the returned values from one call to the next. Finally it
+reassembles the top node from the children, calls `Post` on it and returns the
+result.
+
+If `skip` is returned, it returns the tree and accumulator as is.
+""".
+-spec mapfold(fun((cerl(), term()) -> {cerl(), term()} | skip),
+              fun((cerl(), term()) -> {cerl(), term()}),
+	      term(), cerl()) -> {cerl(), term()}.
 
 mapfold(Pre, Post, S00, T0) ->
     case Pre(T0, S00) of
@@ -525,7 +571,14 @@ mapfold_pairs(_, _, S, []) ->
 %% @see free_variables/1
 %% @see next_free_variable_name/1
 
--spec variables(cerl:cerl()) -> [cerl:var_name()].
+-doc """
+Returns an ordered-set list of the names of all variables in the syntax tree.
+(This includes function name variables.) An exception is thrown if `Tree` does
+not represent a well-formed Core Erlang syntax tree.
+
+_See also: _`free_variables/1`, `next_free_variable_name/1`.
+""".
+-spec variables(cerl()) -> [cerl:var_name()].
 
 variables(T) ->
     variables(T, false).
@@ -539,7 +592,13 @@ variables(T) ->
 %% @see next_free_variable_name/1
 %% @see variables/1
 
--spec free_variables(cerl:cerl()) -> [cerl:var_name()].
+-doc """
+Like [`variables/1`](`variables/1`), but only includes variables that are free
+in the tree.
+
+_See also: _`next_free_variable_name/1`, `variables/1`.
+""".
+-spec free_variables(cerl()) -> [cerl:var_name()].
 
 free_variables(T) ->
     variables(T, true).
@@ -712,7 +771,14 @@ var_list_names([], A) ->
 %% @see variables/1
 %% @see free_variables/1
 
--spec next_free_variable_name(cerl:cerl()) -> integer().
+-doc """
+Returns a integer variable name higher than any other integer variable name in
+the syntax tree. An exception is thrown if `Tree` does not represent a
+well-formed Core Erlang syntax tree.
+
+_See also: _`free_variables/1`, `variables/1`.
+""".
+-spec next_free_variable_name(cerl()) -> integer().
 
 next_free_variable_name(T) ->
     1 + next_free(T, -1).
@@ -811,7 +877,8 @@ next_free_in_defs([], Max) ->
 %%
 %% @equiv label(Tree, 0)
 
--spec label(cerl:cerl()) -> {cerl:cerl(), integer()}.
+-doc "Equivalent to [label(Tree, 0)](`label/2`).".
+-spec label(cerl()) -> {cerl(), integer()}.
 
 label(T) ->
     label(T, 0).
@@ -840,7 +907,26 @@ label(T) ->
 %% @see label/1
 %% @see size/1
 
--spec label(cerl:cerl(), integer()) -> {cerl:cerl(), integer()}.
+-doc """
+Labels each expression in the tree. A term `{label, L}` is prefixed to the
+annotation list of each expression node, where L is a unique number for every
+node, except for variables (and function name variables) which get the same
+label if they represent the same variable. Constant literal nodes are not
+labeled.
+
+The returned value is a tuple `{NewTree, Max}`, where `NewTree` is the labeled
+tree and `Max` is 1 plus the largest label value used. All previous annotation
+terms on the form `{label, X}` are deleted.
+
+The values of L used in the tree is a dense range from `N` to `Max - 1`, where
+`N =< Max =< N + size(Tree)`. Note that it is possible that no labels are used
+at all, i.e., `N = Max`.
+
+Note: All instances of free variables will be given distinct labels.
+
+_See also: _`label/1`, `size/1`.
+""".
+-spec label(cerl(), integer()) -> {cerl(), integer()}.
 
 label(T, N) ->
     label(T, N, #{}).
@@ -1024,7 +1110,7 @@ filter_labels([A | As]) ->
 filter_labels([]) ->
     [].
 
--spec get_label(cerl:cerl()) -> 'top' | integer().
+-spec get_label(cerl()) -> 'top' | integer().
 
 get_label(T) ->
     case get_ann(T) of

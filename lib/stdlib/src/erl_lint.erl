@@ -21,7 +21,54 @@
 %% Do necessary checking of Erlang code.
 
 -module(erl_lint).
--feature(maybe_expr, enable).
+-moduledoc """
+The Erlang code linter.
+
+This module is used to check Erlang code for illegal syntax and other bugs. It
+also warns against coding practices that are not recommended.
+
+The errors detected include:
+
+- Redefined and undefined functions
+- Unbound and unsafe variables
+- Illegal record use
+
+The warnings detected include:
+
+- Unused functions and imports
+- Unused variables
+- Variables imported into matches
+- Variables exported from `if`/`case`/`receive`
+- Variables shadowed in funs and list comprehensions
+
+Some of the warnings are optional, and can be turned on by specifying the
+appropriate option, described below.
+
+The functions in this module are invoked automatically by the Erlang compiler.
+There is no reason to invoke these functions separately unless you have written
+your own Erlang compiler.
+
+[](){: #errorinfo }
+
+## Error Information
+
+`ErrorInfo` is the standard `ErrorInfo` structure that is returned from all I/O
+modules. The format is as follows:
+
+```text
+{ErrorLine, Module, ErrorDescriptor}
+```
+
+A string describing the error is obtained with the following call:
+
+```text
+Module:format_error(ErrorDescriptor)
+```
+
+## See Also
+
+`m:epp`, `m:erl_parse`
+""".
 
 -export([module/1,module/2,module/3,format_error/1]).
 -export([exprs/2,exprs_opt/3,used_vars/2]). % Used from erl_eval.erl.
@@ -49,6 +96,7 @@
 %%              Value.
 %%  The option handling functions.
 
+-doc false.
 -spec bool_option(atom(), atom(), boolean(), [compile:option()]) -> boolean().
 
 bool_option(On, Off, Default, Opts) ->
@@ -57,11 +105,13 @@ bool_option(On, Off, Default, Opts) ->
               (_Opt, Def) -> Def
           end, Default, Opts).
 
+-doc false.
 value_option(Flag, Default, Opts) ->
     foldl(fun ({Opt,Val}, _Def) when Opt =:= Flag -> Val;
               (_Opt, Def) -> Def
           end, Default, Opts).
 
+-doc false.
 value_option(Flag, Default, On, OnVal, Off, OffVal, Opts) ->
     foldl(fun ({Opt,Val}, _Def) when Opt =:= Flag -> Val;
               (Opt, _Def) when Opt =:= On -> OnVal;
@@ -174,7 +224,9 @@ value_option(Flag, Default, On, OnVal, Off, OffVal, Opts) ->
                bvt = none :: 'none' | [any()],  %Variables in binary pattern
                gexpr_context = guard            %Context of guard expression
                    :: gexpr_context(),
-               load_nif=false :: boolean()      %true if calls erlang:load_nif/2
+               load_nif=false :: boolean(),      %true if calls erlang:load_nif/2
+               doc_defined = {false, none} :: {boolean(), term()},
+               moduledoc_defined = {false, none} :: {boolean(), term()}
               }).
 
 -type lint_state() :: #lint{}.
@@ -184,6 +236,11 @@ value_option(Flag, Default, On, OnVal, Off, OffVal, Opts) ->
 %% format_error(Error)
 %%  Return a string describing the error.
 
+-doc """
+Takes an `ErrorDescriptor` and returns a string that describes the error or
+warning. This function is usually called implicitly when processing an
+`ErrorInfo` structure (see section [Error Information](`m:erl_lint#errorinfo`)).
+""".
 -spec format_error(ErrorDescriptor) -> io_lib:chars() when
       ErrorDescriptor :: error_description().
 
@@ -250,6 +307,8 @@ format_error(multiple_on_loads) ->
     "more than one on_load attribute";
 format_error({bad_on_load_arity,{F,A}}) ->
     io_lib:format("function ~tw/~w has wrong arity (must be 0)", [F,A]);
+format_error({Tag, duplicate_doc_attribute, Ann}) ->
+    io_lib:format("redefining documentation attribute (~p) previously set at line ~p", [Tag, Ann]);
 format_error({undefined_on_load,{F,A}}) ->
     io_lib:format("function ~tw/~w undefined", [F,A]);
 format_error(nif_inline) ->
@@ -312,6 +371,8 @@ format_error({obsolete_guard_overridden,Test}) ->
 format_error({too_many_arguments,Arity}) ->
     io_lib:format("too many arguments (~w) - "
 		  "maximum allowed is ~w", [Arity,?MAX_ARGUMENTS]);
+format_error(update_literal) ->
+    "expression updates a literal";
 %% --- patterns and guards ---
 format_error(illegal_pattern) -> "illegal pattern";
 format_error(illegal_map_key) -> "illegal map key in pattern";
@@ -527,9 +588,11 @@ pseudolocals() ->
 %%
 %% Used by erl_eval.erl to check commands.
 %%
+-doc false.
 exprs(Exprs, BindingsList) ->
     exprs_opt(Exprs, BindingsList, []).
 
+-doc false.
 exprs_opt(Exprs, BindingsList, Opts) ->
     {St0,Vs} = foldl(fun({{record,_SequenceNumber,_Name},Attr0}, {St1,Vs1}) ->
                              Attr = set_file(Attr0, "none"),
@@ -541,6 +604,7 @@ exprs_opt(Exprs, BindingsList, Opts) ->
     {_Evt,St} = exprs(set_file(Exprs, "nofile"), Vt, St0),
     return_status(St).
 
+-doc false.
 used_vars(Exprs, BindingsList) ->
     Vs = foldl(fun({{record,_SequenceNumber,_Name},_Attr}, Vs0) -> Vs0;
 		  ({V,_Val}, Vs0) -> [{V,{bound,unused,[]}} | Vs0]
@@ -558,6 +622,7 @@ used_vars(Exprs, BindingsList) ->
 %%  apply_lambda/2 has been called to shut lint up. N.B. these lists are
 %%  really all ordsets!
 
+-doc(#{equiv => module/3}).
 -spec(module(AbsForms) -> {ok, Warnings} | {error, Errors, Warnings} when
       AbsForms :: [erl_parse:abstract_form() | erl_parse:form_info()],
       Warnings :: [{SourceFile,[ErrorInfo]}],
@@ -570,6 +635,7 @@ module(Forms) ->
     St = forms(Forms, start("nofile", Opts)),
     return_status(St).
 
+-doc(#{equiv => module/3}).
 -spec(module(AbsForms, FileName) ->
              {ok, Warnings} | {error, Errors, Warnings} when
       AbsForms :: [erl_parse:abstract_form() | erl_parse:form_info()],
@@ -584,6 +650,32 @@ module(Forms, FileName) ->
     St = forms(Forms, start(FileName, Opts)),
     return_status(St).
 
+-doc """
+Checks all the forms in a module for errors. It returns:
+
+- **`{ok,Warnings}`** - There are no errors in the module.
+
+- **`{error,Errors,Warnings}`** - There are errors in the module.
+
+As this module is of interest only to the maintainers of the compiler, and to
+avoid the same description in two places, the elements of `Options` that control
+the warnings are only described in the [`compile`](`m:compile#erl_lint_options`)
+module.
+
+`AbsForms` of a module, which comes from a file that is read through `epp`, the
+Erlang preprocessor, can come from many files. This means that any references to
+errors must include the filename, see the `m:epp` module or parser (see the
+`m:erl_parse` module). The returned errors and warnings have the following
+format:
+
+```text
+[{SourceFile,[ErrorInfo]}]
+```
+
+The errors and warnings are listed in the order in which they are encountered in
+the forms. The errors from one file can therefore be split into different
+entries in the list of errors.
+""".
 -spec(module(AbsForms, FileName, CompileOptions) ->
              {ok, Warnings} | {error, Errors, Warnings} when
       AbsForms :: [erl_parse:abstract_form() | erl_parse:form_info()],
@@ -678,6 +770,9 @@ start(File, Opts) ->
                       true, Opts)},
          {match_float_zero,
           bool_option(warn_match_float_zero, nowarn_match_float_zero,
+                      true, Opts)},
+         {update_literal,
+          bool_option(warn_update_literal, nowarn_update_literal,
                       true, Opts)}
 	],
     Enabled1 = [Category || {Category,true} <- Enabled0],
@@ -889,22 +984,72 @@ attribute_state({attribute,Aa,behaviour,Behaviour}, St) ->
     St#lint{behaviour=St#lint.behaviour ++ [{Aa,Behaviour}]};
 attribute_state({attribute,Aa,behavior,Behaviour}, St) ->
     St#lint{behaviour=St#lint.behaviour ++ [{Aa,Behaviour}]};
-attribute_state({attribute,A,type,{TypeName,TypeDef,Args}}, St) ->
-    type_def(type, A, TypeName, TypeDef, Args, St);
-attribute_state({attribute,A,opaque,{TypeName,TypeDef,Args}}, St) ->
-    type_def(opaque, A, TypeName, TypeDef, Args, St);
+attribute_state({attribute,A,type,{TypeName,TypeDef,Args}}=AST, St) ->
+    St1 = untrack_doc(AST, St),
+    type_def(type, A, TypeName, TypeDef, Args, St1);
+attribute_state({attribute,A,opaque,{TypeName,TypeDef,Args}}=AST, St) ->
+    St1 = untrack_doc(AST, St),
+    type_def(opaque, A, TypeName, TypeDef, Args, St1);
 attribute_state({attribute,A,spec,{Fun,Types}}, St) ->
     spec_decl(A, Fun, Types, St);
-attribute_state({attribute,A,callback,{Fun,Types}}, St) ->
-    callback_decl(A, Fun, Types, St);
+attribute_state({attribute,A,callback,{Fun,Types}}=AST, St) ->
+    St1  =untrack_doc(AST, St),
+    callback_decl(A, Fun, Types, St1);
 attribute_state({attribute,A,optional_callbacks,Es}, St) ->
     optional_callbacks(A, Es, St);
 attribute_state({attribute,A,on_load,Val}, St) ->
     on_load(A, Val, St);
+attribute_state({attribute, _A, DocAttr, Doc}=AST, St)
+  when is_list(Doc) andalso (DocAttr =:= moduledoc orelse DocAttr =:= doc) ->
+    track_doc(AST, St);
 attribute_state({attribute,_A,_Other,_Val}, St) -> % Ignore others
     St;
 attribute_state(Form, St) ->
     function_state(Form, St#lint{state=function}).
+
+
+%% -doc "
+%% Tracks whether we have read a documentation attribute string multiple times.
+%% Terminal elements that reset the state of the documentation attribute tracking
+%% are:
+
+%% - function,
+%% - opaque,
+%% - type
+%% - callback
+
+%% These terminal elements are also the only ones where one should place
+%% documentation attributes.
+%% ".
+track_doc({attribute, A, Tag, Doc}=_AST, #lint{}=St)
+  when is_list(Doc) andalso (Tag =:= moduledoc orelse Tag =:= doc) ->
+    case get_doc_attr(Tag, St) of
+        {true, Ann} -> add_error(A, {Tag, duplicate_doc_attribute, erl_anno:line(Ann)}, St);
+        {false, _} -> update_doc_attr(Tag, A, St)
+    end;
+track_doc(_AST, St) ->
+    St.
+
+%%
+%% Helper functions to track documentation attributes
+%%
+get_doc_attr(moduledoc, #lint{moduledoc_defined = Moduledoc}) -> Moduledoc;
+get_doc_attr(doc, #lint{doc_defined = Doc}) -> Doc.
+
+update_doc_attr(moduledoc, A, #lint{}=St) ->
+    St#lint{moduledoc_defined = {true, A}};
+update_doc_attr(doc, A, #lint{}=St) ->
+    St#lint{doc_defined = {true, A}}.
+
+%% -doc "
+%% Reset the tracking of a documentation attribute.
+
+%% That is, assume that a terminal object was reached, thus we need to reset
+%% the state so that the linter understands that we have not seen any other
+%% documentation attribute.
+%% ".
+untrack_doc(_AST, St) ->
+    St#lint{doc_defined = {false, none}}.
 
 %% function_state(Form, State) ->
 %%      State'
@@ -914,18 +1059,25 @@ attribute_state(Form, St) ->
 
 function_state({attribute,A,record,{Name,Fields}}, St) ->
     record_def(A, Name, Fields, St);
-function_state({attribute,A,type,{TypeName,TypeDef,Args}}, St) ->
-    type_def(type, A, TypeName, TypeDef, Args, St);
-function_state({attribute,A,opaque,{TypeName,TypeDef,Args}}, St) ->
-    type_def(opaque, A, TypeName, TypeDef, Args, St);
+function_state({attribute,A,type,{TypeName,TypeDef,Args}}=AST, St) ->
+    St1 = untrack_doc(AST, St),
+    type_def(type, A, TypeName, TypeDef, Args, St1);
+function_state({attribute,A,opaque,{TypeName,TypeDef,Args}}=AST, St) ->
+    St1 = untrack_doc(AST, St),
+    type_def(opaque, A, TypeName, TypeDef, Args, St1);
 function_state({attribute,A,spec,{Fun,Types}}, St) ->
     spec_decl(A, Fun, Types, St);
+function_state({attribute,_A,doc,_Val}=AST, St) ->
+    track_doc(AST, St);
+function_state({attribute,_A,moduledoc,_Val}=AST, St) ->
+    track_doc(AST, St);
 function_state({attribute,_A,dialyzer,_Val}, St) ->
     St;
 function_state({attribute,Aa,Attr,_Val}, St) ->
     add_error(Aa, {attribute,Attr}, St);
-function_state({function,Anno,N,A,Cs}, St) ->
-    function(Anno, N, A, Cs, St);
+function_state({function,Anno,N,A,Cs}=AST, St) ->
+    St1 = untrack_doc(AST, St),
+    function(Anno, N, A, Cs, St1);
 function_state({eof,Location}, St) -> eof(Location, St).
 
 %% eof(LastLocation, State) ->
@@ -1790,6 +1942,7 @@ check_multi_field_init(Fs, Anno, Fields, St) ->
 %% is_pattern_expr(Expression) -> boolean().
 %%  Test if a general expression is a valid pattern expression.
 
+-doc false.
 is_pattern_expr(Expr) ->
     case is_pattern_expr_1(Expr) of
 	false -> false;
@@ -2189,6 +2342,12 @@ gexpr_list(Es, Vt, St) ->
 %%  Note: Only use this function in contexts where there can be
 %%  no definition of a local function that may override a guard BIF
 %%  (for example, in the shell).
+-doc """
+Tests if `Expr` is a legal guard test. `Expr` is an Erlang term representing the
+abstract form for the expression.
+[`erl_parse:parse_exprs(Tokens)`](`erl_parse:parse_exprs/1`) can be used to
+generate a list of `Expr`.
+""".
 -spec is_guard_test(Expr) -> boolean() when
       Expr :: erl_parse:abstract_expr().
 
@@ -2196,6 +2355,7 @@ is_guard_test(E) ->
     is_guard_test2(E, {maps:new(),fun(_) -> false end}).
 
 %% is_guard_test(Expression, Forms) -> boolean().
+-doc false.
 is_guard_test(Expression, Forms) ->
     is_guard_test(Expression, Forms, fun(_) -> false end).
 
@@ -2210,6 +2370,7 @@ is_guard_test(Expression, Forms) ->
 %%
 %%    fun(_) -> true end
 %%
+-doc false.
 -spec is_guard_test(Expr, Forms, IsOverridden) -> boolean() when
       Expr :: erl_parse:abstract_expr(),
       Forms :: [erl_parse:abstract_form() | erl_parse:form_info()],
@@ -2252,6 +2413,7 @@ is_guard_test2(G, Info) ->
 %% is_guard_expr(Expression) -> boolean().
 %%  Test if an expression is a guard expression.
 
+-doc false.
 is_guard_expr(E) -> is_gexpr(E, {[],fun({_,_}) -> false end}).
 
 is_gexpr({var,_A,_V}, _Info) -> true;
@@ -2368,10 +2530,10 @@ expr({tuple,_Anno,Es}, Vt, St) ->
     expr_list(Es, Vt, St);
 expr({map,_Anno,Es}, Vt, St) ->
     map_fields(Es, Vt, check_assoc_fields(Es, St), fun expr_list/3);
-expr({map,_Anno,Src,Es}, Vt, St) ->
+expr({map,Anno,Src,Es}, Vt, St) ->
     {Svt,St1} = expr(Src, Vt, St),
     {Fvt,St2} = map_fields(Es, Vt, St1, fun expr_list/3),
-    {vtupdate(Svt, Fvt),St2};
+    {vtupdate(Svt, Fvt), warn_if_literal_update(Anno, Src, St2)};
 expr({record_index,Anno,Name,Field}, _Vt, St) ->
     check_record(Anno, Name, St,
                  fun (Dfs, St1) -> record_field(Field, Name, Dfs, St1) end);
@@ -2394,7 +2556,7 @@ expr({record,Anno,Rec,Name,Upds}, Vt, St0) ->
                                   update_fields(Upds, Name, Dfs, Vt, St)
                           end ),
     case has_wildcard_field(Upds) of
-        no -> {vtmerge(Rvt, Usvt),St2};
+        no -> {vtmerge(Rvt, Usvt), warn_if_literal_update(Anno, Rec, St2)};
         WildAnno -> {[],add_error(WildAnno, {wildcard_in_update,Name}, St2)}
     end;
 expr({bin,_Anno,Fs}, Vt, St) ->
@@ -2587,6 +2749,8 @@ expr({op,_Anno,_Op,L,R}, Vt, St) ->
 %% The following are not allowed to occur anywhere!
 expr({remote,_Anno,M,_F}, _Vt, St) ->
     {[],add_error(erl_parse:first_anno(M), illegal_expr, St)};
+expr({executable_line,_,_}, _Vt, St) ->
+    {[], St};
 expr({ssa_check_when,_Anno,_WantedResult,_Args,_Tag,_Exprs}, _Vt, St) ->
     {[], St}.
 
@@ -4088,6 +4252,38 @@ has_wildcard_field([{record_field,_Af,{var,Aa,'_'},_Val}|_Fs]) -> Aa;
 has_wildcard_field([_|Fs]) -> has_wildcard_field(Fs);
 has_wildcard_field([]) -> no.
 
+%% Raises a warning when updating a (map, record) literal, as that is most
+%% likely unintentional. For example, if we forget a comma in a list like the
+%% following:
+%%
+%%    -record(foo, {bar}).
+%%
+%%    list() ->
+%%        [
+%%            #foo{bar = foo} %% MISSING COMMA!
+%%            #foo{bar = bar}
+%%        ].
+%%
+%% We only raise a warning when the expression-to-be-updated is a map or a
+%% record, as better warnings will be raised elsewhere for other funny
+%% constructs.
+warn_if_literal_update(Anno, Expr, St) ->
+    case is_literal_update(Expr) andalso is_warn_enabled(update_literal, St) of
+        true -> add_warning(Anno, update_literal, St);
+        false -> St
+    end.
+
+is_literal_update({record, _, Inner, _, _}) ->
+    is_literal_update(Inner);
+is_literal_update({record, _, _, _}) ->
+    true;
+is_literal_update({map, _, Inner, _}) ->
+    is_literal_update(Inner);
+is_literal_update({map, _, _}) ->
+    true;
+is_literal_update(_Expr) ->
+    false.
+
 %% check_remote_function(Anno, ModuleName, FuncName, [Arg], State) -> State.
 %%  Perform checks on known remote calls.
 
@@ -4368,6 +4564,7 @@ args_list(_Other) -> 'maybe'.
 args_length({cons,_A,_H,T}) -> 1 + args_length(T);
 args_length({nil,_A}) -> 0.
 
+-doc false.
 check_format_string(Fmt) when is_atom(Fmt) ->
     check_format_string(atom_to_list(Fmt));
 check_format_string(Fmt) when is_binary(Fmt) ->

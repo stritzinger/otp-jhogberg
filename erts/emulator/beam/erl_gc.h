@@ -33,7 +33,6 @@
 
 #define IS_MOVED_BOXED(x)	(!is_header((x)))
 #define IS_MOVED_CONS(x)	(is_non_value((x)))
-Eterm* erts_sub_binary_to_heap_binary(Eterm *ptr, Eterm **hpp, Eterm *orig);
 
 ERTS_GLB_INLINE void move_cons(Eterm *ERTS_RESTRICT ptr, Eterm car, Eterm **hpp,
                                Eterm *orig);
@@ -67,28 +66,26 @@ ERTS_GLB_INLINE Eterm* move_boxed(Eterm *ERTS_RESTRICT ptr, Eterm hdr, Eterm **h
     ASSERT(is_header(hdr));
     nelts = header_arity(hdr);
     switch ((hdr) & _HEADER_SUBTAG_MASK) {
-    case SUB_BINARY_SUBTAG:
-        {
-            ErlSubBin *sb = (ErlSubBin *)ptr;
-            /* convert sub-binary to heap-binary if applicable */
-            if (sb->bitsize == 0 && sb->bitoffs == 0 &&
-                sb->is_writable == 0 && sb->size <= sizeof(Eterm) * 3) {
-                return erts_sub_binary_to_heap_binary(ptr, hpp, orig);
-            }
-        }
-        nelts++;
-        break;
     case MAP_SUBTAG:
-        if (is_flatmap_header(hdr)) nelts+=flatmap_get_size(ptr) + 1;
-        else nelts += hashmap_bitcount(MAP_HEADER_VAL(hdr));
-    break;
-    case FUN_SUBTAG: nelts+=((ErlFunThing*)(ptr))->num_free+1; break;
+        if (is_flatmap_header(hdr)) {
+            nelts += flatmap_get_size(ptr) + 1;
+        } else {
+            nelts += hashmap_bitcount(MAP_HEADER_VAL(hdr));
+        }
+        break;
+    case FUN_SUBTAG:
+        nelts += fun_env_size((ErlFunThing*)(ptr));
+        break;
     }
+
     gval    = make_boxed(htop);
     *orig   = gval;
     *htop++ = hdr;
     *ptr++  = gval;
-    while (nelts--) *htop++ = *ptr++;
+
+    while (nelts--) {
+        *htop++ = *ptr++;
+    }
 
     *hpp = htop;
     return ptr;

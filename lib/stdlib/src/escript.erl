@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 
 -module(escript).
+-moduledoc false.
 
 %% Useful functions that can be called from scripts.
 -export([script_name/0, create/2, extract/2]).
@@ -335,9 +336,7 @@ parse_and_run(File, Args, Options) ->
         is_binary(FormsOrBin) ->
             case Source of
                 archive ->
-		    {ok, FileInfo} = file:read_file_info(File),
-                    case code:set_primary_archive(File, FormsOrBin, FileInfo,
-						  fun escript:parse_file/1) of
+                    case set_primary_archive(File, FormsOrBin) of
                         ok when CheckOnly ->
 			    case code:load_file(Module) of
 				{module, _} ->
@@ -381,6 +380,20 @@ parse_and_run(File, Args, Options) ->
 			    debug(Module, {Module, SrcFile, File, FormsOrBin}, Args)
                     end
             end
+    end.
+
+set_primary_archive(File, FormsOrBin) ->
+    {ok, FileInfo} = file:read_file_info(File),
+    ArchiveFile = filename:absname(File),
+
+    case erl_prim_loader:set_primary_archive(ArchiveFile, FormsOrBin, FileInfo,
+                         fun escript:parse_file/1) of
+        {ok, Ebins} ->
+            %% Prepend the code path with the ebins found in the archive
+            Ebins2 = [filename:join([ArchiveFile, E]) || E <- Ebins],
+            code:add_pathsa(Ebins2, cache); % Returns ok
+        {error, _Reason} = Error ->
+            Error
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -431,7 +444,7 @@ do_parse_file(Type, File, Fd, StartLine, HeaderSz, CheckOnly) ->
 initial_state(File) ->
     #state{file = File,
 	   n_errors = 0,
-	   mode = interpret,
+	   mode = compile,
 	   exports_main = false,
 	   has_records = false}.
 

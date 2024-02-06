@@ -24,6 +24,7 @@
 %%----------------------------------------------------------------------
 
 -module(ssl_session).
+-moduledoc false.
 
 -include("ssl_handshake.hrl").
 -include("ssl_internal.hrl").
@@ -200,14 +201,13 @@ is_resumable(SuggestedSessionId, SessIdTracker,
     case ssl_server_session_cache:reuse_session(SessIdTracker, SuggestedSessionId) of
 	#session{cipher_suite = CipherSuite,
                  own_certificates =  [SessionOwnCert | _],
-		 compression_method = Compression,
 		 is_resumable = IsResumable,
 		 peer_certificate = PeerCert} = Session ->
 	    case resumable(IsResumable)
 		andalso is_owncert(SessionOwnCert, OwnCertKeyPairs)
 		andalso reusable_options(Options, Session)
 		andalso ReuseFun(SuggestedSessionId, PeerCert,
-				 Compression, CipherSuite)
+				 ?NO_COMPRESSION, CipherSuite)
 	    of
 		true  -> {true, Session};
 		false -> {false, undefined}

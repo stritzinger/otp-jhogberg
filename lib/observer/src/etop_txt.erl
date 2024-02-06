@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(etop_txt).
+-moduledoc false.
 -author('siri@erix.ericsson.se').
 
 %%-compile(export_all).
@@ -225,7 +226,8 @@ proc_format(Modifier, #field_widths{init_func = InitFunc, reds = Reds,
     "~" ++ i2l(MsgQ) ++ "w "
     "~-" ++ i2l(CurrFunc) ++ Modifier ++ "s~n".
 
-
+to_string(Other,_Modifier) when is_binary(Other) ->
+    Other;
 to_string({M,F,A},Modifier) ->
     io_lib:format("~w:~"++Modifier++"w/~w",[M,F,A]);
 to_string(Other,Modifier) ->

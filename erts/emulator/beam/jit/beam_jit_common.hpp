@@ -51,6 +51,7 @@ extern "C"
 
 #include "beam_jit_args.hpp"
 #include "beam_jit_types.hpp"
+#include "beam_jit_register_cache.hpp"
 
 using namespace asmjit;
 
@@ -215,7 +216,7 @@ struct BeamModuleAssemblerCommon {
         switch (tag_val_def(constant)) {
         case ATOM_DEF:
             return BeamTypeId::Atom;
-        case BINARY_DEF:
+        case BITSTRING_DEF:
             return BeamTypeId::Bitstring;
         case FLOAT_DEF:
             return BeamTypeId::Float;
@@ -491,7 +492,7 @@ public:
 static const Uint BSC_SEGMENT_OFFSET = 10;
 
 typedef enum : Uint {
-    BSC_OP_BINARY = 0,
+    BSC_OP_BITSTRING = 0,
     BSC_OP_FLOAT = 1,
     BSC_OP_INTEGER = 2,
     BSC_OP_UTF8 = 3,
@@ -617,17 +618,19 @@ Eterm beam_jit_bs_get_integer(Process *c_p,
                               Uint Live);
 
 ErtsMessage *beam_jit_decode_dist(Process *c_p, ErtsMessage *msgp);
-Sint beam_jit_remove_message(Process *c_p,
-                             Sint FCALLS,
-                             Eterm *HTOP,
-                             Eterm *E,
-                             Uint32 active_code_ix);
+Sint32 beam_jit_remove_message(Process *c_p,
+                               Sint32 FCALLS,
+                               Eterm *HTOP,
+                               Eterm *E,
+                               Uint32 active_code_ix);
 
 void beam_jit_bs_construct_fail_info(Process *c_p,
                                      Uint packed_error_info,
                                      Eterm arg3,
                                      Eterm arg1);
 Sint beam_jit_bs_bit_size(Eterm term);
+
+Eterm beam_jit_int128_to_big(Process *p, Uint sign, Uint low, Uint high);
 
 void beam_jit_take_receive_lock(Process *c_p);
 void beam_jit_wait_locked(Process *c_p, ErtsCodePtr cp);
@@ -650,5 +653,8 @@ Export *beam_jit_handle_unloaded_fun(Process *c_p,
                                      Eterm *reg,
                                      int arity,
                                      Eterm fun_thing);
+
+bool beam_jit_is_list_of_immediates(Eterm term);
+bool beam_jit_is_shallow_boxed(Eterm term);
 
 #endif

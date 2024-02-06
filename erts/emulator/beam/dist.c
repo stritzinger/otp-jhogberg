@@ -1997,7 +1997,7 @@ int erts_net_message(Port *prt,
 		     byte *hbuf,
 		     ErlDrvSizeT hlen,
                      Binary *bin,
-		     byte *buf,
+		     const byte *buf,
 		     ErlDrvSizeT len)
 {
     ErtsDistExternal ede, *edep = &ede;
@@ -4193,52 +4193,55 @@ BIF_RETTYPE
 dist_ctrl_put_data_2(BIF_ALIST_2)
 {
     DistEntry *dep;
-    ErlDrvSizeT size;
     Eterm input_handler;
     Uint32 conn_id;
     Binary *bin = NULL;
 
-    if (is_binary(BIF_ARG_2))
-        size = binary_size(BIF_ARG_2);
-    else if (is_nil(BIF_ARG_2))
-        size = 0;
-    else if (is_list(BIF_ARG_2))
+    if (is_list(BIF_ARG_2)) {
         BIF_TRAP2(dist_ctrl_put_data_trap,
                   BIF_P, BIF_ARG_1, BIF_ARG_2);
-    else
-        BIF_ERROR(BIF_P, BADARG);
+    }
 
     dep = erts_dhandle_to_dist_entry(BIF_ARG_1, &conn_id);
-    if (!dep)
+    if (!dep) {
         BIF_ERROR(BIF_P, BADARG);
+    }
 
-    input_handler = (Eterm) erts_atomic_read_nob(&dep->input_handler);
+    input_handler = (Eterm)erts_atomic_read_nob(&dep->input_handler);
 
-    if (input_handler != BIF_P->common.id)
+    if (input_handler != BIF_P->common.id) {
         BIF_ERROR(BIF_P, EXC_NOTSUP);
+    }
 
     erts_atomic64_inc_nob(&dep->in);
 
-    if (size != 0) {
-        byte *data, *temp_alloc = NULL;
+    if (is_bitstring(BIF_ARG_2)) {
+        ERTS_DECLARE_DUMMY(Eterm br_flags);
+        const byte *data, *temp_alloc = NULL;
+        Uint offset, size;
+        BinRef *br;
 
-        if (binary_bitoffset(BIF_ARG_2))
-            data = (byte *) erts_get_aligned_binary_bytes(BIF_ARG_2, &temp_alloc);
-        else {
-            Eterm real_bin;
-            ProcBin *proc_bin;
-            Uint offset, bitoffs, bitsize;
+        ERTS_PIN_BITSTRING(BIF_ARG_2, br_flags, br, data, offset, size);
 
-            ERTS_GET_REAL_BIN(BIF_ARG_2, real_bin, offset, bitoffs, bitsize);
-            ASSERT(bitoffs == 0);
-            data = binary_bytes(real_bin) + offset;
-            proc_bin = (ProcBin *)binary_val(real_bin);
-            if (proc_bin->thing_word == HEADER_PROC_BIN)
-                bin = proc_bin->val;
+        if (TAIL_BITS(size) != 0) {
+            BIF_ERROR(BIF_P, BADARG);
         }
 
-        if (!data)
+        if (BIT_OFFSET(offset) == 0) {
+            data = &data[BYTE_OFFSET(offset)];
+            size = BYTE_SIZE(size);
+
+            bin = br ? br->val : NULL;
+        } else {
+            ERTS_DECLARE_DUMMY(Uint dummy);
+            data = (byte *) erts_get_aligned_binary_bytes(BIF_ARG_2,
+                                                          &size,
+                                                          &temp_alloc);
+        }
+
+        if (!data) {
             BIF_ERROR(BIF_P, BADARG);
+        }
 
         erts_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
 
@@ -4255,6 +4258,8 @@ dist_ctrl_put_data_2(BIF_ALIST_2)
 
         erts_free_aligned_binary_bytes(temp_alloc);
 
+    } else if (is_not_nil(BIF_ARG_2)) {
+        BIF_ERROR(BIF_P, BADARG);
     }
 
     BIF_RET(am_ok);
@@ -4387,13 +4392,13 @@ dist_get_stat_1(BIF_ALIST_1)
 BIF_RETTYPE
 dist_ctrl_input_handler_2(BIF_ALIST_2)
 {
-    DistEntry *dep = ERTS_PROC_GET_DIST_ENTRY(BIF_P);
     Uint32 conn_id;
+    DistEntry *dep = erts_dhandle_to_dist_entry(BIF_ARG_1, &conn_id);
 
     if (!dep)
         BIF_ERROR(BIF_P, EXC_NOTSUP);
 
-    if (erts_dhandle_to_dist_entry(BIF_ARG_1, &conn_id) != dep)
+    if ((ERTS_PROC_GET_DIST_ENTRY(BIF_P) != dep) && !is_internal_port(dep->cid))
         BIF_ERROR(BIF_P, BADARG);
 
     if (is_not_internal_pid(BIF_ARG_2))
@@ -4526,7 +4531,7 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
     ASSERT(iov[0].iov_len == 0);
     ASSERT(!binv[0]);
 
-    hsz = 2 /* cons */ + PROC_BIN_SIZE;
+    hsz = 2 /* cons */ + ERL_REFC_BITS_SIZE;
     hsz *= vlen - 1;
 
     get_size = dep->opts & ERTS_DIST_CTRL_OPT_GET_SIZE;
@@ -4544,32 +4549,18 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
     res = NIL;
 
     for (ix = vlen - 1; ix > 0; ix--) {
-        Binary *bin;
-        ProcBin *pb;
         Eterm bin_term;
+        Binary *bin;
 
         ASSERT(binv[ix]);
-
-        /*
-         * We intentionally avoid using sub binaries
-         * since the GC might convert those to heap
-         * binaries and by this ruin the nice preparation
-         * for usage of this data as I/O vector in
-         * nifs/drivers.
-         */
-        
         bin = ErlDrvBinary2Binary(binv[ix]);
-        pb = (ProcBin *) (char *) hp;
-        hp += PROC_BIN_SIZE;
-        pb->thing_word = HEADER_PROC_BIN;
-        pb->size = (Uint) iov[ix].iov_len;
-        pb->next = MSO(BIF_P).first;
-        MSO(BIF_P).first = (struct erl_off_heap_header*) pb;
-        pb->val = bin;
-        pb->bytes = (byte*) iov[ix].iov_base;
-        pb->flags = 0;
-        OH_OVERHEAD(&MSO(BIF_P), pb->size / sizeof(Eterm));
-        bin_term = make_binary(pb);
+        bin_term = erts_wrap_refc_bitstring(&MSO(BIF_P).first,
+                                            &MSO(BIF_P).overhead,
+                                            &hp,
+                                            bin,
+                                            iov[ix].iov_base,
+                                            0,
+                                            NBITS(iov[ix].iov_len));
 
         res = CONS(hp, bin_term, res);
         hp += 2;

@@ -86,27 +86,34 @@ my @beam_global_funcs = qw(
     i_test_yield_shared
     int_div_rem_body_shared
     int_div_rem_guard_shared
+    is_eq_exact_list_shared
+    is_eq_exact_shallow_boxed_shared
     is_in_range_shared
     is_ge_lt_shared
-    internal_hash_helper
     minus_body_shared
     minus_guard_shared
+    mul_add_body_shared
+    mul_add_guard_shared
+    mul_body_shared
+    mul_guard_shared
     new_map_shared
     plus_body_shared
     plus_guard_shared
     process_exit
     process_main
     raise_exception
+    raise_exception_null_exp
     raise_exception_shared
+    raise_shared
     store_unaligned
-    times_body_shared
-    times_guard_shared
     unary_minus_body_shared
     unary_minus_guard_shared
     unloaded_fun
     update_map_assoc_shared
     update_map_exact_guard_shared
     update_map_exact_body_shared
+    update_map_single_assoc_shared
+    update_map_single_exact_body_shared
     );
 
 # Labels exported from within process_main
@@ -184,6 +191,7 @@ $decl_emit_funcs
 
     x86::Mem emit_i_length_common(Label fail, int state_size);
 
+    void emit_internal_hash_helper();
     void emit_flatmap_get_element();
     void emit_hashmap_get_element();
 

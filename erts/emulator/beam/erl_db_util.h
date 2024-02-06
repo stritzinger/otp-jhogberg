@@ -256,6 +256,21 @@ typedef struct db_table_method
        Only internal use by ets:info(_,binary) */
     int (*db_raw_first)(Process*, DbTable*, Eterm* ret);
     int (*db_raw_next)(Process*, DbTable*, Eterm key, Eterm* ret);
+    /* Same as first/last/next/prev, but returns object(s) along with key */
+    int (*db_first_lookup)(Process* p,
+		    DbTable* tb, /* [in out] */
+		    Eterm* ret   /* [out] */);
+    int (*db_next_lookup)(Process* p,
+		   DbTable* tb, /* [in out] */
+		   Eterm key,   /* [in] */
+		   Eterm* ret /* [out] */);
+    int (*db_last_lookup)(Process* p,
+		   DbTable* tb, /* [in out] */
+		   Eterm* ret   /* [out] */);
+    int (*db_prev_lookup)(Process* p,
+		   DbTable* tb, /* [in out] */
+		   Eterm key,
+		   Eterm* ret);
 } DbTableMethod;
 
 typedef struct db_fixation {
@@ -392,7 +407,7 @@ Wterm db_do_read_element(DbUpdateHandle* handle, Sint position);
 ERTS_GLB_INLINE Eterm db_copy_key(Process* p, DbTable* tb, DbTerm* obj)
 {
     Eterm key = GETKEY(tb, obj->tpl);
-    if IS_CONST(key) return key;
+    if is_immed(key) return key;
     else {
 	Uint size = size_object(key);
 	Eterm* hp = HAlloc(p, size);
@@ -577,11 +592,11 @@ ERTS_GLB_INLINE Binary *erts_db_get_match_prog_binary_unchecked(Eterm term);
 
 /** @brief Ensure off-heap header is word aligned, make a temporary copy if
  * not. Needed when inspecting ETS off-heap lists that may contain unaligned
- * ProcBin and ErtsMRefThing if table is 'compressed'.
+ * BinRef and ErtsMRefThing if table is 'compressed'.
  */
 union erts_tmp_aligned_offheap
 {
-    ProcBin proc_bin;
+    BinRef proc_bin;
     ErtsMRefThing mref_thing;
 };
 ERTS_GLB_INLINE void erts_align_offheap(union erl_off_heap_ptr*,
@@ -625,7 +640,7 @@ erts_align_offheap(union erl_off_heap_ptr* ohp,
 {
     if ((UWord)ohp->voidp % sizeof(UWord) != 0) {
         /*
-         * ETS store word unaligned ProcBin and ErtsMRefThing in its compressed
+         * ETS store word unaligned BinRef and ErtsMRefThing in its compressed
          * format. Make a temporary aligned copy.
          *
          * Warning, must pass (void*)-variable to memcpy. Otherwise it will
@@ -633,9 +648,9 @@ erts_align_offheap(union erl_off_heap_ptr* ohp,
          * about word aligned memory (type cast is not enough).
          */
         sys_memcpy(tmp, ohp->voidp, sizeof(Eterm)); /* thing_word */
-        if (tmp->proc_bin.thing_word == HEADER_PROC_BIN) {
+        if (tmp->proc_bin.thing_word == HEADER_BIN_REF) {
             sys_memcpy(tmp, ohp->voidp, sizeof(tmp->proc_bin));
-            ohp->pb = &tmp->proc_bin;
+            ohp->br = &tmp->proc_bin;
         }
         else {
             sys_memcpy(tmp, ohp->voidp, sizeof(tmp->mref_thing));

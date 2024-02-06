@@ -76,6 +76,32 @@ static BeamGlobalAssembler *bga;
 static BeamModuleAssembler *bma;
 static CpuInfo cpuinfo;
 
+#if defined(__aarch64__) && !(defined(WIN32) || defined(__APPLE__)) &&         \
+        defined(__GNUC__) && defined(ERTS_THR_INSTRUCTION_BARRIER) &&          \
+        ETHR_HAVE_GCC_ASM_ARM_IC_IVAU_INSTRUCTION &&                           \
+        ETHR_HAVE_GCC_ASM_ARM_DC_CVAU_INSTRUCTION
+#    define BEAMASM_MANUAL_ICACHE_FLUSHING
+#endif
+
+#ifdef BEAMASM_MANUAL_ICACHE_FLUSHING
+static UWord min_icache_line_size;
+static UWord min_dcache_line_size;
+#endif
+
+static void init_cache_info() {
+#if defined(__aarch64__) && defined(BEAMASM_MANUAL_ICACHE_FLUSHING)
+    UWord ctr_el0;
+
+    /* DC/IC operate on a cache line basis, so we need to step according to the
+     * _smallest_ data and instruction cache line size.
+     *
+     * Query the "Cache Type Register" MSR to find out what they are. */
+    __asm__ __volatile__("mrs %0, ctr_el0\n" : "=r"(ctr_el0));
+    min_dcache_line_size = (4 << ((ctr_el0 >> 16) & 0xF));
+    min_icache_line_size = (4 << (ctr_el0 & 0xF));
+#endif
+}
+
 /*
  * Enter all BIFs into the export table.
  *
@@ -97,6 +123,8 @@ static void install_bifs(void) {
         int j;
 
         entry = &bif_table[i];
+
+        ERTS_ASSERT(entry->arity <= MAX_BIF_ARITY);
 
         ep = erts_export_put(entry->module, entry->name, entry->arity);
 
@@ -121,21 +149,21 @@ static void install_bifs(void) {
 }
 
 static auto create_allocator(const JitAllocator::CreateParams &params) {
-    void *test_ro, *test_rw;
+    JitAllocator::Span test_span;
     bool single_mapped;
     Error err;
 
     auto *allocator = new JitAllocator(&params);
 
-    err = allocator->alloc(&test_ro, &test_rw, 1);
+    err = allocator->alloc(test_span, 1);
 
     if (err == ErrorCode::kErrorOk) {
         /* We can get dual-mapped memory when asking for single-mapped memory
          * if the latter is not possible: return whether that happened. */
-        single_mapped = (test_ro == test_rw);
+        single_mapped = (test_span.rx() == test_span.rw());
     }
 
-    allocator->release(test_ro);
+    allocator->release(test_span.rx());
 
     if (err == ErrorCode::kErrorOk) {
         return std::make_pair(allocator, single_mapped);
@@ -257,6 +285,7 @@ void beamasm_init() {
 #endif
 
     beamasm_metadata_early_init();
+    init_cache_info();
 
     /*
      * Ensure that commonly used fields in the PCB can be accessed with
@@ -268,6 +297,7 @@ void beamasm_init() {
     ERTS_CT_ASSERT(offsetof(Process, fcalls) < 128);
     ERTS_CT_ASSERT(offsetof(Process, freason) < 128);
     ERTS_CT_ASSERT(offsetof(Process, fvalue) < 128);
+    ERTS_CT_ASSERT(offsetof(Process, flags) < 128);
 
 #ifdef ERLANG_FRAME_POINTERS
     ERTS_CT_ASSERT(offsetof(Process, frame_pointer) < 128);
@@ -420,25 +450,38 @@ extern "C"
 #elif defined(__aarch64__) && defined(__APPLE__)
         /* Issues full memory/instruction barriers on all threads for us. */
         sys_icache_invalidate((char *)address, size);
-#elif defined(__aarch64__) && defined(__GNUC__) &&                             \
-        defined(ERTS_THR_INSTRUCTION_BARRIER) &&                               \
-        ETHR_HAVE_GCC_ASM_ARM_IC_IVAU_INSTRUCTION &&                           \
-        ETHR_HAVE_GCC_ASM_ARM_DC_CVAU_INSTRUCTION
-        /* Note that we do not issue any barriers here, whether instruction or
-         * memory. This is on purpose as we must issue those on all schedulers
+#elif defined(__aarch64__) && defined(BEAMASM_MANUAL_ICACHE_FLUSHING)
+        /* Note that we do not issue an instruction synchronization barrier
+         * here. This is on purpose as we must issue those on all schedulers
          * and not just the calling thread, and the chances of us forgetting to
-         * do that is much higher if we issue them here. */
-        UWord start = reinterpret_cast<UWord>(address);
-        UWord end = start + size;
+         * do that is much higher if we issue one here. */
+        UWord start, end, stride;
 
-        ETHR_COMPILER_BARRIER;
+        start = reinterpret_cast<UWord>(address);
+        end = start + size;
 
-        for (UWord i = start & ~ERTS_CACHE_LINE_MASK; i < end;
-             i += ERTS_CACHE_LINE_SIZE) {
-            __asm__ __volatile__("dc cvau, %0\n"
-                                 "ic ivau, %0\n" ::"r"(i)
-                                 :);
+        stride = min_dcache_line_size;
+        for (UWord i = start & ~(stride - 1); i < end; i += stride) {
+            __asm__ __volatile__("dc cvau, %0\n" ::"r"(i) :);
         }
+
+        /* We need a special memory barrier between clearing dcache and icache,
+         * or there's a chance that the icache on another core is invalidated
+         * before the dcache, which can then be repopulated with stale data. */
+        __asm__ __volatile__("dsb ish\n" ::: "memory");
+
+        stride = min_icache_line_size;
+        for (UWord i = start & ~(stride - 1); i < end; i += stride) {
+            __asm__ __volatile__("ic ivau, %0\n" ::"r"(i) :);
+        }
+
+        /* Ensures that all cores clear their instruction cache before moving
+         * on. The usual full memory barrier (`dmb sy`) executed by the thread
+         * progress mechanism is not sufficient for this.
+         *
+         * Note that this barrier need not be executed on other cores, it's
+         * enough for them to issue an instruction synchronization barrier. */
+        __asm__ __volatile__("dsb ish\n" ::: "memory");
 #elif (defined(__x86_64__) || defined(_M_X64)) &&                              \
         defined(ERTS_THR_INSTRUCTION_BARRIER)
         /* We don't need to invalidate cache on this platform, but since we
@@ -478,6 +521,14 @@ extern "C"
         BeamModuleAssembler *ba = static_cast<BeamModuleAssembler *>(instance);
         const Span<ArgVal> args(static_cast<ArgVal *>(op->a), op->arity);
         return ba->emit(specific_op, args);
+    }
+
+    void beamasm_emit_coverage(void *instance,
+                               void *coverage,
+                               Uint index,
+                               Uint size) {
+        BeamModuleAssembler *ba = static_cast<BeamModuleAssembler *>(instance);
+        ba->emit_coverage(coverage, index, size);
     }
 
     void beamasm_emit_call_nif(const ErtsCodeInfo *info,
@@ -572,9 +623,10 @@ extern "C"
                     out_rw_hdr);
     }
 
-    void beamasm_register_metadata(void *instance, const BeamCodeHeader *hdr) {
+    void *beamasm_register_metadata(void *instance,
+                                    const BeamCodeHeader *header) {
         BeamModuleAssembler *ba = static_cast<BeamModuleAssembler *>(instance);
-        ba->register_metadata(hdr);
+        return ba->register_metadata(header);
     }
 
     Uint beamasm_get_header(void *instance, const BeamCodeHeader **hdr) {
