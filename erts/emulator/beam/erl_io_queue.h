@@ -199,7 +199,7 @@ int erts_ioq_iodata_to_vec(Eterm obj,
                 iov[0].iov_len = NBYTES(size);
                 binv[0] = cbin;
 
-                return 1;
+                return 2;
             }
         }
     }

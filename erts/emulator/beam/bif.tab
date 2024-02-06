@@ -688,6 +688,9 @@ bif os:set_signal/2
 #
 # New in 20.1
 #
+bif erlang:create_io_queue/0
+bif erlang:write_io_queue/2
+bif erlang:empty_io_queue/1
 bif erlang:iolist_to_iovec/1
 
 #

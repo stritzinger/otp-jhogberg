@@ -30,6 +30,8 @@
 #include "erl_bits.h"
 #include "erl_io_queue.h"
 
+#include "erl_driver.h" //for mutex
+
 #define IOL2V_ACC_SIZE (ERL_ONHEAP_BINARY_LIMIT * 4)
 #define IOL2V_BYTES_PER_REDUCTION (16)
 
@@ -248,7 +250,6 @@ int erts_ioq_enqv(ErtsIOQueue *q, ErtsIOVec *eiov, Uint skipbytes)
 	return 0;
 
     n = skip(eiov, skipbytes, &iov, &binv, &len);
-
     if (n < 0)
         return n;
 
@@ -470,43 +471,43 @@ erts_ioq_iolist_to_vec(Eterm obj,	  /* io-list */
     goto L_jump_start;  /* avoid push */
 
     while (!ESTACK_ISEMPTY(s)) {
-	obj = ESTACK_POP(s);
-    L_jump_start:
-	if (is_list(obj)) {
-	L_iter_list:
-	    objp = list_val(obj);
-	    obj = CAR(objp);
-	    if (is_byte(obj)) {
-		if (len == 0)
-		    goto L_overflow;
-		*buf++ = unsigned_val(obj);
-		csize++;
-		len--;
-	    } else if (is_bitstring(obj)) {
-		ESTACK_PUSH(s, CDR(objp));
-		goto handle_binary;
-	    } else if (is_list(obj)) {
-		ESTACK_PUSH(s, CDR(objp));
-		goto L_iter_list;    /* on head */
-	    } else if (!is_nil(obj)) {
-		goto L_type_error;
-	    }
-	    obj = CDR(objp);
-	    if (is_list(obj))
-		goto L_iter_list; /* on tail */
-	    else if (is_bitstring(obj)) {
-		goto handle_binary;
-	    } else if (!is_nil(obj)) {
-		goto L_type_error;
-	    }
-	} else if (is_bitstring(obj)) {
+        obj = ESTACK_POP(s);
+L_jump_start:
+        if (is_list(obj)) {
+L_iter_list:
+            objp = list_val(obj);
+            obj = CAR(objp);
+            if (is_byte(obj)) {
+                if (len == 0)
+                    goto L_overflow;
+                *buf++ = unsigned_val(obj);
+                csize++;
+                len--;
+            } else if (is_bitstring(obj)) {
+                ESTACK_PUSH(s, CDR(objp));
+                goto handle_binary;
+            } else if (is_list(obj)) {
+                ESTACK_PUSH(s, CDR(objp));
+                goto L_iter_list;    /* on head */
+            } else if (!is_nil(obj)) {
+                goto L_type_error;
+            }
+            obj = CDR(objp);
+            if (is_list(obj))
+                goto L_iter_list; /* on tail */
+            else if (is_bitstring(obj)) {
+                goto handle_binary;
+            } else if (!is_nil(obj)) {
+                goto L_type_error;
+            }
+        } else if (is_bitstring(obj)) {
             ERTS_DECLARE_DUMMY(Eterm br_flags);
             Uint size_in_bytes;
             Uint offset, size;
             byte *base;
             BinRef *br;
 
-        handle_binary:
+handle_binary:
             ERTS_PIN_BITSTRING(obj, br_flags, br, base, offset, size);
             ASSERT(TAIL_BITS(size) == 0);
 
@@ -661,46 +662,46 @@ erts_ioq_iolist_vec_len(Eterm obj, int* vsize, Uint* csize,
 
     while (!ESTACK_ISEMPTY(s)) {
 	obj = ESTACK_POP(s);
-    L_jump_start:
+L_jump_start:
 	if (is_list(obj)) {
-	L_iter_list:
+L_iter_list:
 	    objp = list_val(obj);
 	    obj = CAR(objp);
 
 	    if (is_byte(obj)) {
-		c_size++;
-		if (c_size == 0) {
-		    goto L_overflow_error;
-		}
-		if (!in_clist) {
-		    in_clist = 1;
-		    v_size++;
-		}
-		p_c_size++;
-		if (!p_in_clist) {
-		    p_in_clist = 1;
-		    p_v_size++;
-		}
+            c_size++;
+            if (c_size == 0) {
+                goto L_overflow_error;
+            }
+            if (!in_clist) {
+                in_clist = 1;
+                v_size++;
+            }
+            p_c_size++;
+            if (!p_in_clist) {
+                p_in_clist = 1;
+                p_v_size++;
+            }
 	    }
 	    else if (is_bitstring(obj)) {
-                IO_LIST_VEC_COUNT(obj);
+            IO_LIST_VEC_COUNT(obj);
 	    }
 	    else if (is_list(obj)) {
-		ESTACK_PUSH(s, CDR(objp));
-		goto L_iter_list;   /* on head */
+		    ESTACK_PUSH(s, CDR(objp));
+		    goto L_iter_list;   /* on head */
 	    }
 	    else if (!is_nil(obj)) {
-		goto L_type_error;
+		    goto L_type_error;
 	    }
 
 	    obj = CDR(objp);
 	    if (is_list(obj))
-		goto L_iter_list;   /* on tail */
+		    goto L_iter_list;   /* on tail */
 	    else if (is_bitstring(obj)) {  /* binary tail is OK */
-		IO_LIST_VEC_COUNT(obj);
+		    IO_LIST_VEC_COUNT(obj);
 	    }
 	    else if (!is_nil(obj)) {
-		goto L_type_error;
+		    goto L_type_error;
 	    }
 	}
 	else if (is_bitstring(obj)) {
@@ -1220,4 +1221,179 @@ BIF_RETTYPE iolist_to_iovec_1(BIF_ALIST_1) {
     }
 
     BIF_RET(result);
+}
+
+#if 1 //nif way
+typedef struct erl_bif_io_vec {
+    int iovcnt;  /* length of vectors */
+    size_t size; /* total size in bytes */
+    SysIOVec *iov;
+} ErlBifIOVec;
+#else //erts way
+
+#endif
+
+
+
+#define SMALL_WRITE_VEC 16
+#define ERL_SMALL_IO_BIN_LIMIT 64
+
+static int erts_ioq_list_vec(Eterm list, ErtsIOVec **evp)
+{
+    ErtsIOQBinary *cbin = NULL;
+    SysIOVec      *ivp;
+    ErtsIOQBinary **bvp;
+    int vsize;
+    Uint csize;
+    Uint pvsize;
+    Uint pcsize;
+    size_t iov_offset, binv_offset, alloc_size;
+    Uint blimit = 0;
+    void *ptr = NULL;
+    size_t total_size;
+
+    if (!evp)
+        return 1;
+
+    if (erts_ioq_iodata_vec_len(list, &vsize, &csize, &pvsize, &pcsize,
+                                &total_size, ERL_SMALL_IO_BIN_LIMIT))
+        return 2;
+
+    fprintf(stderr, "%s(%d), vsize %u, csize %lu, pvsieze %lu, pcsize %lu, total %ld\n",
+            __func__, __LINE__, vsize, csize, pvsize, pcsize, total_size);
+
+    /* To pack or not to pack (small binaries) ...? */
+    if (vsize >= SMALL_WRITE_VEC) {
+        /* Do pack */
+        vsize = pvsize + 1;
+        csize = pcsize;
+        blimit = ERL_SMALL_IO_BIN_LIMIT;
+        fprintf(stderr, "%s(%d), To pack. vsize %u, csize %lu.\n", __func__, __LINE__, vsize, csize);
+    }
+
+    if (csize) {
+        cbin = (ErtsIOQBinary *)erts_bin_nrml_alloc(csize);
+        if (!cbin)
+            return 3;
+    }
+
+    iov_offset  =  ERTS_ALC_DATA_ALIGN_SIZE(sizeof(ErlIOVec));
+    binv_offset =  iov_offset;
+    binv_offset += ERTS_ALC_DATA_ALIGN_SIZE((vsize+1)*sizeof(SysIOVec));
+    alloc_size  =  binv_offset;
+    alloc_size  += (vsize+1)*sizeof(ErtsIOQBinary *);
+
+    ptr = erts_alloc_fnf(ERTS_ALC_A_BINARY, alloc_size);
+    if (!ptr)
+        return 4;
+
+    *evp = (ErtsIOVec *) ptr;
+    ivp = (*evp)->common.iov = (SysIOVec *) (ptr + iov_offset);
+    bvp = (*evp)->common.binv = (ErtsIOQBinary **) (ptr + binv_offset);
+
+    int temp_size = erts_ioq_iodata_to_vec(list, ivp, bvp, cbin, blimit, 0);
+    if (temp_size < 0) {
+        fprintf(stderr, "%s(%d), failure temp_size %d.\n", __func__, __LINE__, temp_size);
+        erts_free(ERTS_ALC_T_DRV_CMD_DATA, *evp);
+        //driver_free_binary(&cbin->driver);
+        return 5;
+    }
+
+    (*evp)->common.vsize = temp_size;
+    return 0;
+}
+
+typedef struct {
+    ErtsIOQueue ioq;
+    ethr_mutex mutex;
+} ErlUserIOQueue;
+
+static int ioq_destructor(Binary *data) {
+    ErlUserIOQueue *state = ERTS_MAGIC_BIN_UNALIGNED_DATA(data);
+
+    erts_ioq_clear(&state->ioq);
+    ethr_mutex_destroy(&state->mutex);
+
+    return 1;
+}
+
+BIF_RETTYPE create_io_queue_0(BIF_ALIST_0) {
+    Binary *magic_binary = NULL;
+    ErlUserIOQueue *state = NULL;
+
+    magic_binary = erts_create_magic_binary_x(sizeof(ErlUserIOQueue),
+        &ioq_destructor, ERTS_ALC_T_BINARY, 1);
+
+    state = ERTS_MAGIC_BIN_UNALIGNED_DATA(magic_binary);
+    erts_ioq_init(&state->ioq, ERTS_ALC_T_BINARY, 0);
+    ethr_mutex_init(&state->mutex);
+
+    Eterm *hp = NULL;
+    hp = HAlloc(BIF_P, ERTS_MAGIC_REF_THING_SIZE);
+
+    return erts_mk_magic_ref(&hp, &MSO(BIF_P), magic_binary);
+}
+
+BIF_RETTYPE write_io_queue_2(BIF_ALIST_2) {
+    Binary *magic_binary;
+    ErlUserIOQueue *state;
+    ErtsIOVec *evp = NULL;
+    size_t total_size = 0;
+
+    if (!is_internal_magic_ref(BIF_ARG_1))
+        BIF_ERROR(BIF_P, BADARG);
+
+    magic_binary = erts_magic_ref2bin(BIF_ARG_1);
+
+    if (ERTS_MAGIC_BIN_DESTRUCTOR(magic_binary) != &ioq_destructor)
+        BIF_ERROR(BIF_P, BADARG);
+
+    state = ERTS_MAGIC_BIN_UNALIGNED_DATA(magic_binary);
+
+    ASSERT(is_list(BIF_ARG_2));
+
+    int ret = erts_ioq_list_vec(BIF_ARG_2, &evp);
+    if (0 == ret) {
+        ethr_mutex_lock(&state->mutex);
+        erts_ioq_enqv(&state->ioq, evp, 0);
+        total_size = erts_ioq_size(&state->ioq);
+        ethr_mutex_unlock(&state->mutex);
+
+        fprintf(stderr, "%s(%d),ioq_list_vec success, total_size %ld.\n", __func__, __LINE__, total_size);
+        BIF_RET(erts_make_integer(total_size, BIF_P));
+
+    } else {
+
+        fprintf(stderr, "%s(%d), failure ret %d.\n", __func__, __LINE__, ret);
+#if 1
+	BIF_RET(erts_make_integer(total_size, BIF_P));
+#else
+	BIF_ERROR(BIF_P, BADARG);
+#endif
+    }
+}
+
+BIF_RETTYPE empty_io_queue_1(BIF_ALIST_1) {
+    size_t total_size;
+    //BIF_RETTYPE result;
+    Binary *magic_binary;
+    ErlUserIOQueue *state;
+
+    if (!is_internal_magic_ref(BIF_ARG_1)) {
+        BIF_ERROR(BIF_P, BADARG);
+    }
+
+    magic_binary = erts_magic_ref2bin(BIF_ARG_1);
+
+    if (ERTS_MAGIC_BIN_DESTRUCTOR(magic_binary) != &ioq_destructor) {
+        BIF_ERROR(BIF_P, BADARG);
+    }
+    state = ERTS_MAGIC_BIN_UNALIGNED_DATA(magic_binary);
+
+    ethr_mutex_lock(&state->mutex);
+    total_size = erts_ioq_size(&state->ioq);
+    erts_ioq_deq(&state->ioq, total_size);
+    ethr_mutex_unlock(&state->mutex);
+
+    BIF_RET(erts_make_integer(total_size, BIF_P));
 }
