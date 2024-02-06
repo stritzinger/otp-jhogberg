@@ -2584,15 +2584,12 @@ t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
   ?union(U1) = force_union(S1),
   ?union(U2) = force_union(S2),
   U3 = sup_union(U1,U2),
-  case t_is_any(U3) of 
-    true -> ?any;
-    false -> lists:foldl(fun(Nominal, Acc) -> 
-      case t_is_any(Acc) of
-        true -> ?any;
-        false -> sup_union(force_union(Acc), t_sup(Nominal,U3))
-      end 
-    end, ?nominal_set([],?none), NU1)
-  end;
+  lists:foldl(fun(Nominal, Acc) -> 
+    case t_is_any(Acc) of
+      true -> ?any;
+      false -> sup_union(force_union(Acc), t_sup(Nominal,U3))
+    end 
+  end, ?nominal_set([], U3), NU1);
 t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
   t_sup(T1,?nominal_set([T2],?none));
 t_sup(?nominal(_,_)=T1,?nominal_set(_,_) = T2) ->
@@ -2717,14 +2714,6 @@ sup_tuples_in_set([?tuple(Elements1, Arity, Tag1) = T1|Left1] = L1,
   end;
 sup_tuples_in_set([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_tuples_in_set(L1, [], Acc) -> lists:reverse(Acc, L1).
-
-%(Seems to be unnecessary) This can only be executed if only one of the unions is a force_union of structural types, the other is a force_union of nominal types
-%sup_union(?nominal_set(_,_)=U1, U2) -> 
-  %true = length(U1) =:= length(U2), %Assertion.
-  %true = ?num_types_in_union =:= length(U1), %Assertion
-  %?nominal_set(sup_union(U1,[?none,?none,?none,?none,?none,?none,?none,?none,?none]), sup_union(U2,[?none,?none,?none,?none,?none,?none,?none,?none,?none])).
-%sup_union(U1, ?nominal(_,_)=U2) ->
-  %sup_union(U2,U1).
 
 sup_union(U1, U2) ->
   true = length(U1) =:= length(U2), %Assertion.
@@ -2918,23 +2907,21 @@ t_inf(?nominal(_, _), ?nominal(_, _), _) ->
   t_none();
 t_inf(?nominal_set(N1,S1),?nominal_set(N2,S2),Opaques) ->
   Inf1 = inf_nominal_sets(N1,N2,[],Opaques),
-  Inf2 = lists:foldl(fun(Nominal, Acc) -> 
+  Inf2 = lists:foldr(fun(Nominal, Acc) -> 
     case t_inf(Nominal, S2, Opaques) of 
       ?none -> Acc; 
-      true -> t_inf(Nominal, S2, Opaques) 
+      true -> [t_inf(Nominal, S2, Opaques), Acc] 
     end
     end, [], N1),
-  Inf3 = lists:foldl(fun(Nominal, Acc) -> 
-    case t_inf(Nominal, S1) of 
+  Inf3 = lists:foldr(fun(Nominal, Acc) -> 
+    case t_inf(Nominal, S1, Opaques) of 
       ?none -> Acc;
-      true -> t_inf(Nominal, S1, Opaques) 
+      true -> [t_inf(Nominal, S1, Opaques), Acc] 
     end
     end, [], N2),
   Inf4 = t_inf(S1,S2),
-  %If N1 and S1 has no structural overlap, N2 and S2 has no structural overlap, we can prove that at most one of Inf1 and Inf2 is non-empty,
-  %and at most one of Inf3 and Inf4 is nonempty. 
   case not t_is_none_or_unit(Inf2) or not t_is_none_or_unit(Inf3) of
-    true -> ?nominal_set(sup_nominal_sets(Inf2, Inf3, []), ?none);
+    true -> ?nominal_set(sup_nominal_sets(sup_nominal_sets(Inf1, Inf2, []), Inf3, []), ?none);
     false -> 
       case not t_is_none_or_unit(Inf1) of
         true -> ?nominal_set(Inf1, Inf4);
