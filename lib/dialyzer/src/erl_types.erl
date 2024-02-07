@@ -2580,23 +2580,13 @@ t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
     N1 > N2   -> ?nominal_set([T2,T1],?none)
   end;
 t_sup(?nominal_set(_,S1)=T1,?nominal_set(_,S2)=T2) ->
-  NU1 = sup_nominal_sets(T1,T2,[]),
   ?union(U1) = force_union(S1),
   ?union(U2) = force_union(S2),
-  U3 = sup_union(U1,U2),
-  U4 = lists:foldl(fun(Nominal, Acc) -> 
-    case t_is_any(Acc) of
-      true -> ?any;
-      false -> 
-        case t_sup(Nominal, U3) of 
-          ?nominal_set(_,_) -> Acc;
-          _ -> sup_union(force_union(Acc), force_union(t_sup(Nominal, U3)))
-        end
-    end 
-  end, U3, NU1),
+  U3 = sup_union(U1, U2),
+  NU1 = sup_nominal_sets(T1,T2,?nominal_set([],U3)),
   case NU1 of 
-    [] -> U4;
-    _ -> ?nominal_set(NU1, U4)
+    ?nominal_set([], U) -> U;
+    _ -> NU1
   end;
 t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
   t_sup(T1,?nominal_set([T2],?none));
@@ -2650,24 +2640,28 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
-sup_nominal_sets(?nominal_set([?nominal(Name, S1)|Left1], Str1), ?nominal_set([?nominal(Name, S2)|Left2], Str2), Acc) ->
-  NewAcc = [?nominal(Name, t_sup(S1, S2))|Acc],
-  sup_nominal_sets(?nominal_set(Left1, Str1), ?nominal_set(Left2, Str2), NewAcc);
-sup_nominal_sets(?nominal_set([?nominal(Name1, S1) = T1|Left1] = L1, Str1),
-	       ?nominal_set([?nominal(Name2, S2) = T2|Left2] = L2, Str2), Acc) ->
+sup_nominal_sets(_, _, ?nominal_set(_, ?any)) -> ?nominal_set([], ?any);
+%Concatenate nominals into AccN
+sup_nominal_sets(?nominal_set([?nominal(Name, S1)|Left1], ?none), ?nominal_set([?nominal(Name, S2)|Left2], ?none), ?nominal_set(AccN, AccS)) ->
+  NewAcc = ?nominal_set([?nominal(Name, t_sup(S1, S2))|AccN], AccS),
+  sup_nominal_sets(?nominal_set(Left1, ?none), ?nominal_set(Left2, ?none), NewAcc);
+sup_nominal_sets(?nominal_set([?nominal(Name1, _) = T1|Left1], ?none) = L1,
+	       ?nominal_set([?nominal(Name2, _) = T2|Left2], ?none) = L2, ?nominal_set(AccN, AccS)) ->
   if Name1 < Name2 -> 
-      case t_is_none_or_unit(t_inf(S1, Str2)) of 
-        true -> sup_nominal_sets(Left1, L2, [T1|Acc]);
-        false -> sup_nominal_sets(Left1, L2, Acc)
-      end;
+      sup_nominal_sets(?nominal_set(Left1, ?none), L2, ?nominal_set([T1|AccN], AccS));
      Name1 > Name2 -> 
-      case t_is_none_or_unit(t_inf(S2, Str1)) of 
-        true -> sup_nominal_sets(Left1, L2, [T2|Acc]);
-        false -> sup_nominal_sets(L1, Left2, Acc)
-      end
+      sup_nominal_sets(L1, ?nominal_set(Left2, ?none), ?nominal_set([T2|AccN], AccS))
   end;
-sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
-sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
+sup_nominal_sets(?nominal_set([], ?none), ?nominal_set(L2, ?none), ?nominal_set(AccN, AccS)) -> 
+  ?nominal_set(lists:reverse(AccN, L2), AccS);
+sup_nominal_sets(?nominal_set(_, _) = T1, ?nominal_set([], ?none) = T2, Acc) -> 
+  sup_nominal_sets(T2, T1, Acc);
+%First call of sup_nominal_sets should come to this branch. Remove all nominals that intersects structural U, and then set both structural parts of nominal_sets to ?none
+sup_nominal_sets(?nominal_set(Nom1, _), ?nominal_set(Nom2, _), ?nominal_set([], U)) ->
+  NoDup = fun(?nominal(_, S)) -> t_is_none_or_unit(t_inf(S, U)) end,
+  NewN1 = lists:filter(NoDup, Nom1),
+  NewN2 = lists:filter(NoDup, Nom2),
+  sup_nominal_sets(?nominal_set(NewN1, ?none), ?nominal_set(NewN2, ?none), ?nominal_set([], U)).
 
 sup_tuple_sets(L1, L2) ->
   TotalArities = ordsets:union([Arity || {Arity, _} <- L1],
