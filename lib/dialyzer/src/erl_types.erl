@@ -2594,7 +2594,10 @@ t_sup(?nominal_set(_,S1)=T1,?nominal_set(_,S2)=T2) ->
         end
     end 
   end, U3, NU1),
-  ?nominal_set(NU1, U4);
+  case NU1 of 
+    [] -> U4;
+    _ -> ?nominal_set(NU1, U4)
+  end;
 t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
   t_sup(T1,?nominal_set([T2],?none));
 t_sup(?nominal(_,_)=T1,?nominal_set(_,_) = T2) ->
