@@ -2654,13 +2654,13 @@ sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_widen(_, _, ?nominal_set(_, ?any)) -> ?nominal_set([], ?any);
 sup_widen([], _, ?nominal_set(AccN, AccS)) -> ?nominal_set(AccN, AccS);
-sup_widen([?nominal(_,_) = Nominal| T] = NU1, U3, ?nominal_set(AccN, AccS)) -> 
+sup_widen([?nominal(_,_) = Nominal| T], U3, ?nominal_set(AccN, AccS)) -> 
   case t_sup(Nominal, U3) of 
     ?nominal_set(_,_) -> 
       sup_widen(T, U3, ?nominal_set([AccN| Nominal], AccS));
     _ -> 
       NewU = sup_union(force_union(AccS), force_union(t_sup(Nominal, U3))),
-      sup_widen(NU1, NewU, ?nominal_set(AccN, ?none))
+      sup_widen([AccN| T], NewU, ?nominal_set([], ?none))
   end.
 
 sup_tuple_sets(L1, L2) ->
