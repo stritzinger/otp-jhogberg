@@ -2584,11 +2584,7 @@ t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
   ?union(U2) = force_union(S2),
   U3 = sup_union(U1, U2),
   NU1 = sup_nominal_sets(N1,N2,[]),
-  NU2 = sup_widen(NU1, U3, ?nominal_set([], ?none)),
-  case NU2 of 
-    ?nominal_set([], U) -> U;
-    _ -> NU2
-  end;
+  sup_widen(NU1, U3, [], ?none);
 t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
   t_sup(T1,?nominal_set([T2],?none));
 t_sup(?nominal(_,_)=T1,?nominal_set(_,_) = T2) ->
@@ -2652,15 +2648,16 @@ sup_nominal_sets([?nominal(Name1, _) = T1|Left1] = L1,
 sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
 
-sup_widen(_, _, ?nominal_set(_, ?any)) -> ?nominal_set([], ?any);
-sup_widen([], _, ?nominal_set(AccN, AccS)) -> ?nominal_set(AccN, AccS);
-sup_widen([?nominal(_,_) = Nominal| T], U3, ?nominal_set(AccN, AccS)) -> 
+sup_widen(_, _, _, ?any) -> ?any;
+sup_widen([], _, [], AccS) -> AccS;
+sup_widen([], _, AccN, AccS) -> ?nominal_set(AccN, AccS);
+sup_widen([?nominal(_,_) = Nominal| T], U3, AccN, AccS) -> 
   case t_sup(Nominal, U3) of 
     ?nominal_set(_,_) -> 
-      sup_widen(T, U3, ?nominal_set([AccN| Nominal], AccS));
+      sup_widen(T, U3, [AccN| Nominal], AccS);
     _ -> 
       NewU = sup_union(force_union(AccS), force_union(t_sup(Nominal, U3))),
-      sup_widen([AccN| T], NewU, ?nominal_set([], ?none))
+      sup_widen([AccN| T], NewU, [], ?none)
   end.
 
 sup_tuple_sets(L1, L2) ->
