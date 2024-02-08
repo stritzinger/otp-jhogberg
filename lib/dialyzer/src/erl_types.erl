@@ -2579,14 +2579,15 @@ t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
     N1 < N2   -> ?nominal_set([T1,T2],?none);
     N1 > N2   -> ?nominal_set([T2,T1],?none)
   end;
-t_sup(?nominal_set(_,S1)=T1,?nominal_set(_,S2)=T2) ->
+t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
   ?union(U1) = force_union(S1),
   ?union(U2) = force_union(S2),
   U3 = sup_union(U1, U2),
-  NU1 = sup_nominal_sets(T1,T2,?nominal_set([],U3)),
-  case NU1 of 
+  NU1 = sup_nominal_sets(N1,N2,[]),
+  NU2 = sup_widen(NU1, U3, ?nominal_set([], ?none)),
+  case NU2 of 
     ?nominal_set([], U) -> U;
-    _ -> NU1
+    _ -> NU2
   end;
 t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
   t_sup(T1,?nominal_set([T2],?none));
@@ -2640,34 +2641,27 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
-sup_nominal_sets(_, _, ?nominal_set(_, ?any)) -> ?nominal_set([], ?any);
-%Concatenate nominals into AccN
-sup_nominal_sets(?nominal_set([?nominal(Name, S1)|Left1], ?none), ?nominal_set([?nominal(Name, S2)|Left2], ?none), ?nominal_set(AccN, AccS)) ->
-  Inf = t_inf(t_sup(S1, S2), AccS),
-  case t_is_none_or_unit(Inf) of
-    true -> 
-      NewAcc = ?nominal_set([?nominal(Name, t_sup(S1, S2))|AccN], AccS),
-      sup_nominal_sets(?nominal_set(Left1, ?none), ?nominal_set(Left2, ?none), NewAcc);
-    false ->
-      sup_nominal_sets(?nominal_set(Left1, AccS), ?nominal_set(Left2, AccS), ?nominal_set(AccN, t_sup(t_sup(S1, S2), AccS)))
+sup_nominal_sets([?nominal(Name, S1)|Left1], [?nominal(Name, S2)|Left2], Acc) ->
+  NewAcc = [?nominal(Name, t_sup(S1, S2))|Acc],
+  sup_nominal_sets(Left1, Left2, NewAcc);
+sup_nominal_sets([?nominal(Name1, _) = T1|Left1] = L1,
+	       [?nominal(Name2, _) = T2|Left2] = L2, Acc) ->
+  if Name1 < Name2 -> sup_nominal_sets(Left1, L2, [T1|Acc]);
+     Name1 > Name2 -> sup_nominal_sets(L1, Left2, [T2|Acc])
   end;
-sup_nominal_sets(?nominal_set([?nominal(Name1, _) = T1|Left1], ?none) = L1,
-	       ?nominal_set([?nominal(Name2, _) = T2|Left2], ?none) = L2, ?nominal_set(AccN, AccS)) ->
-  if Name1 < Name2 -> 
-      sup_nominal_sets(?nominal_set(Left1, ?none), L2, ?nominal_set([T1|AccN], AccS));
-     Name1 > Name2 -> 
-      sup_nominal_sets(L1, ?nominal_set(Left2, ?none), ?nominal_set([T2|AccN], AccS))
-  end;
-sup_nominal_sets(?nominal_set([], ?none), ?nominal_set(L2, ?none), ?nominal_set(AccN, AccS)) -> 
-  ?nominal_set(lists:reverse(AccN, L2), AccS);
-sup_nominal_sets(?nominal_set(_, _) = T1, ?nominal_set([], ?none) = T2, Acc) -> 
-  sup_nominal_sets(T2, T1, Acc);
-%First call of sup_nominal_sets should come to this branch. Remove all nominals that intersects structural U, and then set both structural parts of nominal_sets to ?none
-sup_nominal_sets(?nominal_set(Nom1, _), ?nominal_set(Nom2, _), ?nominal_set(AccN, U)) ->
-  NoDup = fun(?nominal(_, S)) -> t_is_none_or_unit(t_inf(S, U)) end,
-  NewN1 = lists:filter(NoDup, Nom1),
-  NewN2 = lists:filter(NoDup, Nom2),
-  sup_nominal_sets(?nominal_set(NewN1, ?none), ?nominal_set(NewN2, ?none), ?nominal_set(AccN, U)).
+sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
+sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
+
+sup_widen(_, _, ?nominal_set(_, ?any)) -> ?nominal_set([], ?any);
+sup_widen([], _, ?nominal_set(AccN, AccS)) -> ?nominal_set(AccN, AccS);
+sup_widen([?nominal(_,_) = Nominal| T] = NU1, U3, ?nominal_set(AccN, AccS)) -> 
+  case t_sup(Nominal, U3) of 
+    ?nominal_set(_,_) -> 
+      sup_widen(T, U3, ?nominal_set([AccN| Nominal], AccS));
+    _ -> 
+      NewU = sup_union(force_union(AccS), force_union(t_sup(Nominal, U3))),
+      sup_widen(NU1, NewU, ?nominal_set(AccN, ?none))
+  end.
 
 sup_tuple_sets(L1, L2) ->
   TotalArities = ordsets:union([Arity || {Arity, _} <- L1],
@@ -2764,19 +2758,6 @@ force_union(T = ?opaque(_)) ->        ?opaque_union(T);
 force_union(T = ?map(_,_,_)) ->       ?map_union(T);
 force_union(T = ?tuple(_, _, _)) ->   ?tuple_union(T);
 force_union(T = ?tuple_set(_)) ->     ?tuple_union(T);
-force_union(T = ?nominal(_, _)) -> 
-  AtomSlot = t_inf(T, t_atom()),
-  BitstrSlot = t_inf(T, t_bitstr()),
-  FunSlot = t_inf(T, t_fun()),
-  IdentifierSlot = t_inf(T, t_identifier()),
-  List = t_inf(T, t_list()),
-  Nil = t_inf(T, t_nil()),
-  ListSlot = t_sup(List,Nil),
-  NumberSlot = t_inf(T, t_number()),
-  OpaqueSlot = t_contains_opaque(T),
-  MapSlot = t_inf(T, t_map()),
-  TupleSlot = t_inf(T, t_tuple()),
-  ?union([AtomSlot,BitstrSlot,FunSlot,IdentifierSlot,ListSlot,NumberSlot,OpaqueSlot,MapSlot,TupleSlot]);
 force_union(T = ?union(_)) ->         T.
 
 %%-----------------------------------------------------------------------------
