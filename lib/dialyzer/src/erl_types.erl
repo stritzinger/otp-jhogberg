@@ -2653,16 +2653,16 @@ sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 normalize_nominal_set(_, _, _, ?any) -> ?any;
 normalize_nominal_set([], _, [], AccS) -> AccS;
-normalize_nominal_set([], _, AccN, AccS) -> ?nominal_set(AccN, AccS);
+normalize_nominal_set([], _, AccN, AccS) -> ?nominal_set(lists:reverse(AccN), AccS);
 normalize_nominal_set([?nominal(_,_) = Nominal| T], U3, AccN, AccS) -> 
   case t_sup(Nominal, U3) of 
     ?nominal_set(_,_) -> 
-      normalize_nominal_set(T, U3, lists:reverse([Nominal| AccN]), AccS);
+      normalize_nominal_set(T, U3, [Nominal| AccN], AccS);
     ?nominal(_,_) ->
-      normalize_nominal_set(T, ?none, lists:reverse([Nominal| AccN]), AccS);
+      normalize_nominal_set(T, ?none, [Nominal| AccN], AccS);
     _ -> 
       NewU = sup_union(force_union(AccS), force_union(t_sup(Nominal, U3))),
-      normalize_nominal_set([AccN| T], NewU, [], ?none)
+      normalize_nominal_set([T| AccN], NewU, [], ?none)
   end.
 
 sup_tuple_sets(L1, L2) ->

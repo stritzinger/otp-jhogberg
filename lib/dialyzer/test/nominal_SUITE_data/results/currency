@@ -1,0 +1,7 @@
+
+currency.erl:31:1: Function t1/0 has no local return
+currency.erl:32:10: The call currency:krToEuro(3,7) breaks the contract (rate(),kr()) -> euro()
+currency.erl:34:1: Function t2/0 has no local return
+currency.erl:35:26: The call currency:euroToKr(nominal(rate, float()),nominal(dollar, float())) breaks the contract (rate(),euro()) -> kr()
+currency.erl:37:1: Function t3/0 has no local return
+currency.erl:38:40: The call currency:dollar_ctor(204) breaks the contract (float()) -> dollar()
