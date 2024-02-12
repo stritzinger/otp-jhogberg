@@ -373,6 +373,7 @@
 -define(num_types_in_union, length(?untagged_union(?any, ?any, ?any, ?any, ?any,
                                                    ?any, ?any, ?any, ?any))).
 
+-define(none_union(),        ?union([?none,?none,?none,?none,?none,?none,?none,?none,?none])).
 -define(atom_union(T),       ?union([T,?none,?none,?none,?none,?none,?none,?none,?none])).
 -define(bitstr_union(T),     ?union([?none,T,?none,?none,?none,?none,?none,?none,?none])).
 -define(function_union(T),   ?union([?none,?none,T,?none,?none,?none,?none,?none,?none])).
@@ -2744,6 +2745,7 @@ sup_union([], [], N, Acc) ->
       ?union(lists:reverse(Acc))
   end.
 
+force_union(?none) ->                 ?none_union();
 force_union(T = ?atom(_)) ->          ?atom_union(T);
 force_union(T = ?bitstr(_, _)) ->     ?bitstr_union(T);
 force_union(T = ?function(_, _)) ->   ?function_union(T);

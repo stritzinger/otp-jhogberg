@@ -1,0 +1,3 @@
+
+unions.erl:16:1: Function trivial/1 has no local return
+unions.erl:23:9: The call unions:baz({nominal(foo, 1 | 2 | 3)|4}) breaks the contract (nominal('bar',1 | 2 | 3)) -> 'ok'

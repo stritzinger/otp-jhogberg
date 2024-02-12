@@ -1,0 +1,7 @@
+
+meterfeet.erl:12:2: Invalid type specification for function meterfeet:id2/1.
+ The success typing is meterfeet:id2(nominal(feet, 42)) -> number()
+ But the spec is meterfeet:id2(meter()) -> integer()
+ They do not overlap in the 1st argument
+meterfeet.erl:25:1: Function t2/0 has no local return
+meterfeet.erl:26:9: The call meterfeet:id2(nominal(feet, 42)) breaks the contract (meter()) -> integer()
