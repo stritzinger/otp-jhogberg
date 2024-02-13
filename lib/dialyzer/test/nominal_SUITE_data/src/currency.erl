@@ -22,10 +22,10 @@ rate_ctor(X) -> X.
 transaction_ctor(X, Y, Z) -> {X, Y, Z}.
 
 -spec euroToKr(rate(), euro()) -> kr().
-euroToKr(Rate, Amount) -> Rate * Amount.
+euroToKr(Rate, Amount) -> trunc(Rate * Amount).
 
 -spec krToEuro(rate(), kr()) -> euro().
-krToEuro(Rate, Amount) -> Rate * Amount.
+krToEuro(Rate, Amount) -> float(Rate * Amount).
 
 -spec euroToDollar(rate(), euro()) -> dollar().
 euroToDollar(Rate, Amount) -> Rate * Amount.
@@ -38,3 +38,9 @@ t2() ->
 
 t3() ->
     transaction_ctor(305, 3.0, dollar_ctor(204.0)).
+
+-spec t4(kr()) -> nominal(kr, 10 | 20 | 30) | nominal(euro, float()) | atom().
+t4(X) -> 5.
+
+-spec t5(nominal(kr, 21 | 22) | nominal(kr, 24)) -> nominal(kr, 84| 88).
+t5(X) -> X * 4.

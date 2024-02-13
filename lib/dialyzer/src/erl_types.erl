@@ -2735,7 +2735,11 @@ sup_union(U1, U2) ->
 sup_union([?none|Left1], [?none|Left2], N, Acc) ->
   sup_union(Left1, Left2, N, [?none|Acc]);
 sup_union([T1|Left1], [T2|Left2], N, Acc) ->
-  sup_union(Left1, Left2, N+1, [t_sup(T1, T2)|Acc]);
+  Sup = t_sup(T1, T2),
+  case Sup == t_atom() orelse Sup == t_bitstr() orelse Sup == t_fun() orelse Sup == t_identifier() orelse Sup == t_list() orelse t_contains_opaque(Sup) orelse Sup == t_number() orelse Sup == t_map() orelse Sup == t_tuple() of
+    true -> sup_union(Left1, Left2, N+1, [Sup|Acc]);
+    false -> sup_union(Left1, Left2, N, [Sup|Acc])
+  end;
 sup_union([], [], N, Acc) ->
   if
     N =:= 0 ->
@@ -2915,7 +2919,7 @@ t_inf(?nominal_set([?nominal(N,S1)|_],Other1), ?nominal(N,S2)=T2, Opaques)->
 t_inf(?nominal_set([?nominal(_,_)],S1), ?nominal(_,_)=T2, Opaques) -> 
   t_inf(T2, S1, Opaques);
 t_inf(?nominal_set([_|T],S), ?nominal(_,_) = N, Opaques) -> 
-  t_inf(?nominal_set([T],S), N, Opaques);
+  t_inf(?nominal_set(T,S), N, Opaques);
 t_inf(?nominal(_,_)=T1,?nominal_set(_,_)=T2,Opaques) ->
   t_inf(T2,T1,Opaques);
 t_inf(?nominal(Name, S1), S2, Opaques) ->

@@ -1,7 +1,10 @@
 
-currency.erl:31:1: Function t1/0 has no local return
-currency.erl:32:10: The call currency:krToEuro(3,7) breaks the contract (rate(),kr()) -> euro()
-currency.erl:34:1: Function t2/0 has no local return
-currency.erl:35:26: The call currency:euroToKr(nominal(rate, float()),nominal(dollar, float())) breaks the contract (rate(),euro()) -> kr()
-currency.erl:37:1: Function t3/0 has no local return
-currency.erl:38:40: The call currency:dollar_ctor(204) breaks the contract (float()) -> dollar()
+currency.erl:33:1: Function t1/0 has no local return
+currency.erl:36:1: Function t2/0 has no local return
+currency.erl:37:30: The call currency:euroToKr(nominal(rate, float()),nominal(dollar, float())) breaks the contract (rate(),euro()) -> kr()
+currency.erl:39:1: Function t3/0 has no local return
+currency.erl:40:32: The call currency:transaction_ctor(305,3.0,nominal(dollar, float())) breaks the contract (integer(),money(),euro() | kr()) -> transaction()
+currency.erl:42:2: Invalid type specification for function currency:t4/1.
+ The success typing is currency:t4(_) -> 5
+ But the spec is currency:t4(kr()) -> nominal('kr',10 | 20 | 30) | nominal('euro',float()) | atom()
+ The return types do not overlap
