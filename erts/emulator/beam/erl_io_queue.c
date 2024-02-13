@@ -1240,7 +1240,7 @@ typedef struct erl_bif_io_vec {
 
 static int erts_ioq_list_vec(Eterm list, ErtsIOVec **evp)
 {
-    ErtsIOQBinary *cbin = NULL;
+    ErtsIOQBinary *cbin;
     SysIOVec      *ivp;
     ErtsIOQBinary **bvp;
     int vsize;
@@ -1249,15 +1249,18 @@ static int erts_ioq_list_vec(Eterm list, ErtsIOVec **evp)
     Uint pcsize;
     size_t iov_offset, binv_offset, alloc_size;
     Uint blimit = 0;
-    void *ptr = NULL;
+    /* REVIEW: pointer arithmetic is invalid on void* */
+    char *ptr;
     size_t total_size;
 
-    if (!evp)
-        return 1;
+    /* REVIEW: We're in control of evp, so passing an invalid value should
+     * crash rather than raise an error. */
+    ASSERT(evp);
 
     if (erts_ioq_iodata_vec_len(list, &vsize, &csize, &pvsize, &pcsize,
-                                &total_size, ERL_SMALL_IO_BIN_LIMIT))
+                                &total_size, ERL_SMALL_IO_BIN_LIMIT)) {
         return 2;
+    }
 
     fprintf(stderr, "%s(%d), vsize %u, csize %lu, pvsieze %lu, pcsize %lu, total %ld\n",
             __func__, __LINE__, vsize, csize, pvsize, pcsize, total_size);
@@ -1272,18 +1275,22 @@ static int erts_ioq_list_vec(Eterm list, ErtsIOVec **evp)
     }
 
     if (csize) {
-        cbin = (ErtsIOQBinary *)erts_bin_nrml_alloc(csize);
+        cbin = (ErtsIOQBinary *)erts_bin_nrml_alloc_fnf(csize);
         if (!cbin)
             return 3;
+    } else {
+        cbin = NULL;
     }
 
     iov_offset  =  ERTS_ALC_DATA_ALIGN_SIZE(sizeof(ErlIOVec));
     binv_offset =  iov_offset;
-    binv_offset += ERTS_ALC_DATA_ALIGN_SIZE((vsize+1)*sizeof(SysIOVec));
+    binv_offset += ERTS_ALC_DATA_ALIGN_SIZE((vsize)*sizeof(SysIOVec));
     alloc_size  =  binv_offset;
-    alloc_size  += (vsize+1)*sizeof(ErtsIOQBinary *);
+    alloc_size  += vsize*sizeof(ErtsIOQBinary *);
 
-    ptr = erts_alloc_fnf(ERTS_ALC_A_BINARY, alloc_size);
+    /* REVIEW: Allocation type must be an allocation type, that is, one of
+     * ERTS_ALC_T_xyz */
+    ptr = erts_alloc_fnf(ERTS_ALC_T_TMP, alloc_size);
     if (!ptr)
         return 4;
 
@@ -1294,12 +1301,19 @@ static int erts_ioq_list_vec(Eterm list, ErtsIOVec **evp)
     int temp_size = erts_ioq_iodata_to_vec(list, ivp, bvp, cbin, blimit, 0);
     if (temp_size < 0) {
         fprintf(stderr, "%s(%d), failure temp_size %d.\n", __func__, __LINE__, temp_size);
-        erts_free(ERTS_ALC_T_DRV_CMD_DATA, *evp);
-        //driver_free_binary(&cbin->driver);
+
+        /* REVIEW: Allocation type must match for alloc+free */
+        erts_free(ERTS_ALC_T_TMP, *evp);
+
+        if (cbin) {
+            erts_bin_free((Binary*)cbin);
+        }
+
         return 5;
     }
 
     (*evp)->common.vsize = temp_size;
+    (*evp)->common.size = total_size;
     return 0;
 }
 
@@ -1358,6 +1372,8 @@ BIF_RETTYPE write_io_queue_2(BIF_ALIST_2) {
         erts_ioq_enqv(&state->ioq, evp, 0);
         total_size = erts_ioq_size(&state->ioq);
         ethr_mutex_unlock(&state->mutex);
+
+        erts_free(ERTS_ALC_T_TMP, evp);
 
         fprintf(stderr, "%s(%d),ioq_list_vec success, total_size %ld.\n", __func__, __LINE__, total_size);
         BIF_RET(erts_make_integer(total_size, BIF_P));
