@@ -3663,13 +3663,14 @@ t_subtract(?nominal_set(N1, S1), ?nominal_set(N2, S2)) ->
   subtract_nominal_sets(N1, S1, N2, S2, []);
 t_subtract(?nominal_set(N, S), ?nominal(_, _) = T2) ->
   subtract_nominal_sets(N, S, [T2], ?none, []);
-t_subtract(?nominal(_,_), ?nominal_set(_,_)) -> ?none;
+t_subtract(?nominal(_,_) = N1, ?nominal_set(N2,S2)) -> 
+  subtract_nominal_sets(N1, ?none, N2, S2, []);
 t_subtract(?nominal_set(N, S1), S2) ->
   subtract_nominal_sets(N, S1, [], S2, []);
 t_subtract(S1, ?nominal_set(_, S2)) -> t_subtract(S1, S2);
 t_subtract(?nominal(Name, S1), ?nominal(Name, S2)) ->
   t_subtract(?nominal(Name, S1), S2);
-t_subtract(?nominal(_, _), ?nominal(_, _)) -> ?none;
+t_subtract(?nominal(_, _) = T, ?nominal(_, _)) -> T;
 t_subtract(?nominal(Name, S1), S2) ->
   Sub = t_subtract(S1, S2),
   case t_is_none_or_unit(Sub) of
