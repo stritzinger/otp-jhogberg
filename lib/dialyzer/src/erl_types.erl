@@ -3661,39 +3661,11 @@ t_subtract(?float, ?number(_Set, Tag)) ->
   end;
 t_subtract(?nominal_set(N1, S1), ?nominal_set(N2, S2)) -> 
   subtract_nominal_sets(N1, S1, N2, S2, []);
-t_subtract(?nominal_set([?nominal(Name, S1)], S), ?nominal(Name, S2)) ->
-  Sub1 = t_subtract(?nominal(Name, S1), ?nominal(Name, S2)),
-  case t_is_none_or_unit(Sub1) of
-    true -> S;
-    false -> ?nominal_set(Sub1, S)
-  end;
-t_subtract(?nominal_set([?nominal(_, _)], _) = T, ?nominal(_,_)) -> T;
-t_subtract(?nominal_set([?nominal(Name, S1)|T], S), ?nominal(Name, S2)) -> 
-  Sub = t_subtract(?nominal(Name, S1), ?nominal(Name, S2)),
-  case t_is_none_or_unit(Sub) of
-    true -> t_subtract(?nominal_set(T, S), ?nominal(Name, S2));
-    false -> t_sup(t_subtract(?nominal_set(T, S), ?nominal(Name, S2)), Sub)
-  end;
-t_subtract(?nominal_set([H|T], S), ?nominal(_,_) = T2) ->
-  t_sup(t_subtract(?nominal_set(T, S), T2), H);
+t_subtract(?nominal_set(N, S), ?nominal(_, _) = T2) ->
+  subtract_nominal_sets(N, S, [T2], ?none, []);
 t_subtract(?nominal(_,_), ?nominal_set(_,_)) -> ?none;
-t_subtract(?nominal_set([H], S1), S2) ->
-  Sub1 = t_subtract(H, S2),
-  Sub2 = t_subtract(S1, S2),
-  case t_is_none_or_unit(Sub1) of
-    true -> Sub2;
-    false -> 
-      case t_is_none_or_unit(Sub2) of
-        true -> Sub1;
-        false -> ?nominal(Sub1, Sub2)
-      end
-  end;
-t_subtract(?nominal_set([H|T], S1), S2) -> 
-  Sub = t_subtract(H, S2),
-  case t_is_none_or_unit(Sub) of
-    true -> t_subtract(?nominal_set(T, S1), S2);
-    false -> t_sup(t_subtract(?nominal_set(T, S1), S2), Sub)
-  end;
+t_subtract(?nominal_set(N, S1), S2) ->
+  subtract_nominal_sets(N, S1, [], S2, []);
 t_subtract(S1, ?nominal_set(_, S2)) -> t_subtract(S1, S2);
 t_subtract(?nominal(Name, S1), ?nominal(Name, S2)) ->
   t_subtract(?nominal(Name, S1), S2);
