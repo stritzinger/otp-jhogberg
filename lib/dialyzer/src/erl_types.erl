@@ -3659,6 +3659,52 @@ t_subtract(?float, ?number(_Set, Tag)) ->
     ?unknown_qual -> ?none;
     _ -> ?float
   end;
+t_subtract(?nominal_set(N1, S1), ?nominal_set(N2, S2)) -> 
+  subtract_nominal_sets(N1, S1, N2, S2, []);
+t_subtract(?nominal_set([?nominal(Name, S1)], S), ?nominal(Name, S2)) ->
+  Sub1 = t_subtract(?nominal(Name, S1), ?nominal(Name, S2)),
+  case t_is_none_or_unit(Sub1) of
+    true -> S;
+    false -> ?nominal_set(Sub1, S)
+  end;
+t_subtract(?nominal_set([?nominal(_, _)], _) = T, ?nominal(_,_)) -> T;
+t_subtract(?nominal_set([?nominal(Name, S1)|T], S), ?nominal(Name, S2)) -> 
+  Sub = t_subtract(?nominal(Name, S1), ?nominal(Name, S2)),
+  case t_is_none_or_unit(Sub) of
+    true -> t_subtract(?nominal_set(T, S), ?nominal(Name, S2));
+    false -> t_sup(t_subtract(?nominal_set(T, S), ?nominal(Name, S2)), Sub)
+  end;
+t_subtract(?nominal_set([H|T], S), ?nominal(_,_) = T2) ->
+  t_sup(t_subtract(?nominal_set(T, S), T2), H);
+t_subtract(?nominal(_,_), ?nominal_set(_,_)) -> ?none;
+t_subtract(?nominal_set([H], S1), S2) ->
+  Sub1 = t_subtract(H, S2),
+  Sub2 = t_subtract(S1, S2),
+  case t_is_none_or_unit(Sub1) of
+    true -> Sub2;
+    false -> 
+      case t_is_none_or_unit(Sub2) of
+        true -> Sub1;
+        false -> ?nominal(Sub1, Sub2)
+      end
+  end;
+t_subtract(?nominal_set([H|T], S1), S2) -> 
+  Sub = t_subtract(H, S2),
+  case t_is_none_or_unit(Sub) of
+    true -> t_subtract(?nominal_set(T, S1), S2);
+    false -> t_sup(t_subtract(?nominal_set(T, S1), S2), Sub)
+  end;
+t_subtract(S1, ?nominal_set(_, S2)) -> t_subtract(S1, S2);
+t_subtract(?nominal(Name, S1), ?nominal(Name, S2)) ->
+  t_subtract(?nominal(Name, S1), S2);
+t_subtract(?nominal(_, _), ?nominal(_, _)) -> ?none;
+t_subtract(?nominal(Name, S1), S2) ->
+  Sub = t_subtract(S1, S2),
+  case t_is_none_or_unit(Sub) of
+    true -> ?none;
+    false -> ?nominal(Name, Sub)
+  end;
+t_subtract(S1, ?nominal(_, _)) -> S1;
 t_subtract(?number(_, _), ?number(?any, ?unknown_qual)) -> ?none;
 t_subtract(?number(_, _) = T1, ?integer(?any)) -> t_inf(?float, T1);
 t_subtract(?int_set(Set1), ?int_set(Set2)) ->
@@ -3842,6 +3888,33 @@ subtract_union([], [], Type, Acc) ->
     _ ->
       Type
   end.
+
+subtract_nominal_sets([], Str1, _, Str2, []) -> t_subtract(Str1, Str2);
+subtract_nominal_sets([], Str1, _, Str2, Acc) -> ?nominal_set(lists:reverse(Acc), t_subtract(Str1, Str2));
+subtract_nominal_sets([?nominal(Name, S1)|Ts1], Str1, [], Str2, Acc) -> 
+  Sub = t_subtract(S1, Str2),
+  case t_is_none_or_unit(Sub) of
+    true -> subtract_nominal_sets(Ts1, Str1, [], Str2, Acc);
+    false -> subtract_nominal_sets(Ts1, Str1, [], Str2, [?nominal(Name, Sub)|Acc])
+  end;
+subtract_nominal_sets([?nominal(Name, S1)|Ts1], Str1, [?nominal(Name, S2)|Ts2], Str2, Acc) ->
+  Sub1 = t_subtract(S1, S2),
+  Sub2 = t_subtract(S1, Str2),
+  case t_is_none_or_unit(Sub1) and t_is_none_or_unit(Sub2) of
+    true -> subtract_nominal_sets(Ts1, Str1, Ts2, Str2, Acc);
+    false -> subtract_nominal_sets(Ts1, Str1, Ts2, Str2, [?nominal(Name, t_sup(Sub1, Sub2))|Acc])
+  end;
+subtract_nominal_sets([?nominal(Name1, S1)|Ts1] = L1, Str1, [?nominal(Name2, _)|Ts2] = L2, Str2, Acc) ->
+  Sub = t_subtract(S1, Str2),
+  if Name1 < Name2 ->
+      case t_is_none_or_unit(Sub) of
+        true -> subtract_nominal_sets(Ts1, Str1, L2, Str2, Acc);
+        false -> subtract_nominal_sets(Ts1, Str1, L2, Str2, [?nominal(Name1, Sub)|Acc])
+      end;
+    Name1 > Name2 ->
+      subtract_nominal_sets(L1, Str1, Ts2, Str2, Acc)
+  end.
+
 
 %% Helper for tuple and product subtraction. The second list
 %% should contain a single element that is not none. That element
