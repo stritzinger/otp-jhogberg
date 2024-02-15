@@ -657,6 +657,12 @@ decorate(?tuple_set(List), ?tuple(_, Arity, _) = T, Opaques) ->
   decorate_tuple_sets(List, [{Arity, [T]}], Opaques);
 decorate(?tuple_set(List), ?tuple_set(L), Opaques) ->
   decorate_tuple_sets(List, L, Opaques);
+decorate(?nominal(N, S1), ?nominal(_, S2), Opaques) ->
+  ?nominal(N, decorate(S1, S2, Opaques));
+decorate(?nominal_set([?nominal(N1, S1)], Str1), ?nominal_set([?nominal(_, S2)], Str2), Opaques) -> 
+  ?nominal_set([?nominal(N1, decorate(S1, S2, Opaques))], decorate(Str1, Str2, Opaques));
+decorate(?nominal_set([?nominal(_,_) = N1|T1], Str1), ?nominal_set([?nominal(_,_) = N2|T2], Str2), Opaques) -> 
+  t_sup(decorate(?nominal_set(T1, Str1), ?nominal_set(T2, Str2), Opaques), decorate(N1, N2, Opaques));
 decorate(?union(List), T, Opaques) when T =/= ?any ->
   ?union(L) = force_union(T),
   union_decorate(List, L, Opaques);
