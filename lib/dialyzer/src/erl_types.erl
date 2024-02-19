@@ -3976,6 +3976,12 @@ t_unopaque(?opaque(_) = T, Opaques) ->
     true -> t_unopaque(t_opaque_structure(T), Opaques);
     false -> T
   end;
+t_unopaque(?nominal(N, S), _) ->
+  ?nominal(N, t_unopaque(S));
+t_unopaque(?nominal_set([H], S), Opaques) ->
+  t_sup(t_unopaque(H, Opaques), t_unopaque(S));
+t_unopaque(?nominal_set([H|T], S), Opaques) ->
+  t_sup(t_unopaque(?nominal_set(T, S), Opaques), t_unopaque(H));
 t_unopaque(?list(ElemT, Termination, Sz), Opaques) ->
   ?list(t_unopaque(ElemT, Opaques), t_unopaque(Termination, Opaques), Sz);
 t_unopaque(?tuple(?any, _, _) = T, _) -> T;
