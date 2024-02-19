@@ -373,7 +373,6 @@
 -define(num_types_in_union, length(?untagged_union(?any, ?any, ?any, ?any, ?any,
                                                    ?any, ?any, ?any, ?any))).
 
--define(none_union,          ?union([?none,?none,?none,?none,?none,?none,?none,?none,?none])).
 -define(atom_union(T),       ?union([T,?none,?none,?none,?none,?none,?none,?none,?none])).
 -define(bitstr_union(T),     ?union([?none,T,?none,?none,?none,?none,?none,?none,?none])).
 -define(function_union(T),   ?union([?none,?none,T,?none,?none,?none,?none,?none,?none])).
@@ -795,7 +794,6 @@ t_is_unit(_) -> false.
 
 t_is_impossible(?none) -> true;
 t_is_impossible(?unit) -> true;
-t_is_impossible(?none_union) -> true;
 t_is_impossible(_) -> false.
 
 -spec t_is_none_or_unit(erl_type()) -> boolean().
@@ -2592,9 +2590,7 @@ t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
     N1 > N2   -> ?nominal_set([T2,T1],?none)
   end;
 t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
-  ?union(U1) = force_union(S1),
-  ?union(U2) = force_union(S2),
-  U3 = sup_union(U1, U2),
+  U3 = t_sup(S1, S2),
   NU1 = sup_nominal_sets(N1,N2,[]),
   normalize_nominal_set(NU1, U3, [], ?none);
 t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
@@ -2670,8 +2666,8 @@ normalize_nominal_set([?nominal(_,_) = Nominal| T], U3, AccN, AccS) ->
     ?nominal(_,_) ->
       normalize_nominal_set(T, ?none, [Nominal| AccN], AccS);
     _ -> 
-      NewU = sup_union(force_union(AccS), force_union(t_sup(Nominal, U3))),
-      normalize_nominal_set([T| AccN], NewU, [], ?none)
+      NewU = t_sup(AccS, t_sup(Nominal, U3)),
+      normalize_nominal_set(T++ AccN, NewU, [], ?none)
   end.
 
 sup_tuple_sets(L1, L2) ->
@@ -2737,8 +2733,8 @@ sup_tuples_in_set([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_tuples_in_set(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_union(U1, U2) ->
-  %true = length(U1) =:= length(U2), %Assertion.
-  %true = ?num_types_in_union =:= length(U1), %Assertion
+  true = length(U1) =:= length(U2), %Assertion.
+  true = ?num_types_in_union =:= length(U1), %Assertion
   sup_union(U1, U2, 0, []).
 
 sup_union([?none|Left1], [?none|Left2], N, Acc) ->
@@ -2761,7 +2757,6 @@ sup_union([], [], N, Acc) ->
       ?union(lists:reverse(Acc))
   end.
 
-force_union(?none) ->                 ?none_union;
 force_union(T = ?atom(_)) ->          ?atom_union(T);
 force_union(T = ?bitstr(_, _)) ->     ?bitstr_union(T);
 force_union(T = ?function(_, _)) ->   ?function_union(T);

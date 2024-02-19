@@ -1188,7 +1188,7 @@ mk_alg(dummy=Name) ->
 %% =====================================================================
 
 -doc "Algorithm specific internal state".
--type exs64_state() :: nominal(exs64_state, uint64()).
+-opaque exs64_state() :: uint64().
 
 exs64_seed(L) when is_list(L) ->
     [R] = seed64_nz(1, L),
@@ -1251,7 +1251,7 @@ exs64_next(R) ->
 %%
 %% =====================================================================
 -doc "Algorithm specific internal state".
--type exsplus_state() :: nominal(exsplus_state, nonempty_improper_list(uint58(), uint58())).
+-opaque exsplus_state() :: nonempty_improper_list(uint58(), uint58()).
 
 -dialyzer({no_improper_lists, exsplus_seed/1}).
 
@@ -1454,7 +1454,7 @@ exsplus_jump(S, [AS0|AS1], J, N) ->
 %% =====================================================================
 
 -doc "Algorithm specific internal state".
--type exs1024_state() :: nominal(exs1024_state, {list(uint64()), list(uint64())}).
+-opaque exs1024_state() :: {list(uint64()), list(uint64())}.
 
 exs1024_seed(L) when is_list(L) ->
     {seed64_nz(16, L), []};
@@ -1641,7 +1641,7 @@ exs1024_jump({L, RL}, AS, JL, J, N, TN) ->
 %% =====================================================================
 
 -doc "Algorithm specific internal state".
--type exro928_state() :: nominal(exro928_state, {list(uint58()), list(uint58())}).
+-opaque exro928_state() :: {list(uint58()), list(uint58())}.
 
 -doc false.
 -spec exro928_seed(
@@ -1813,7 +1813,7 @@ exro928_jump_2pow20(SR) ->
 %% }
 
 -doc "Algorithm specific internal state".
--type exrop_state() :: nominal(exrop_state, nonempty_improper_list(uint58(), uint58())).
+-opaque exrop_state() :: nonempty_improper_list(uint58(), uint58()).
 
 -dialyzer({no_improper_lists, exrop_seed/1}).
 
