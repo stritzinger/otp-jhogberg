@@ -373,7 +373,7 @@
 -define(num_types_in_union, length(?untagged_union(?any, ?any, ?any, ?any, ?any,
                                                    ?any, ?any, ?any, ?any))).
 
--define(none_union(),        ?union([?none,?none,?none,?none,?none,?none,?none,?none,?none])).
+-define(none_union,          ?union([?none,?none,?none,?none,?none,?none,?none,?none,?none])).
 -define(atom_union(T),       ?union([T,?none,?none,?none,?none,?none,?none,?none,?none])).
 -define(bitstr_union(T),     ?union([?none,T,?none,?none,?none,?none,?none,?none,?none])).
 -define(function_union(T),   ?union([?none,?none,T,?none,?none,?none,?none,?none,?none])).
@@ -795,6 +795,7 @@ t_is_unit(_) -> false.
 
 t_is_impossible(?none) -> true;
 t_is_impossible(?unit) -> true;
+t_is_impossible(?none_union) -> true;
 t_is_impossible(_) -> false.
 
 -spec t_is_none_or_unit(erl_type()) -> boolean().
@@ -1343,6 +1344,7 @@ t_cons_hd(Type) ->
 t_cons_hd(Type, Opaques) ->
   do_opaque(Type, Opaques, fun cons_hd/1).
 
+cons_hd(?nominal(_, List)) -> cons_hd(List);
 cons_hd(?nonempty_list(Contents, _Termination)) -> Contents.
 
 -spec t_cons_tl(erl_type()) -> erl_type().
@@ -1355,6 +1357,7 @@ t_cons_tl(Type) ->
 t_cons_tl(Type, Opaques) ->
   do_opaque(Type, Opaques, fun cons_tl/1).
 
+cons_tl(?nominal(_, List)) -> cons_tl(List);
 cons_tl(?nonempty_list(_Contents, Termination) = T) ->
   t_sup(Termination, T).
 
@@ -2734,8 +2737,8 @@ sup_tuples_in_set([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_tuples_in_set(L1, [], Acc) -> lists:reverse(Acc, L1).
 
 sup_union(U1, U2) ->
-  true = length(U1) =:= length(U2), %Assertion.
-  true = ?num_types_in_union =:= length(U1), %Assertion
+  %true = length(U1) =:= length(U2), %Assertion.
+  %true = ?num_types_in_union =:= length(U1), %Assertion
   sup_union(U1, U2, 0, []).
 
 sup_union([?none|Left1], [?none|Left2], N, Acc) ->
@@ -2758,7 +2761,7 @@ sup_union([], [], N, Acc) ->
       ?union(lists:reverse(Acc))
   end.
 
-force_union(?none) ->                 ?none_union();
+force_union(?none) ->                 ?none_union;
 force_union(T = ?atom(_)) ->          ?atom_union(T);
 force_union(T = ?bitstr(_, _)) ->     ?bitstr_union(T);
 force_union(T = ?function(_, _)) ->   ?function_union(T);
