@@ -3448,6 +3448,33 @@ t_unify_table_only(Type, ?var(Id), VarMap) ->
 t_unify_table_only(?function(Domain1, Range1), ?function(Domain2, Range2), VarMap) ->
   VarMap1 = t_unify_table_only(Domain1, Domain2, VarMap),
   t_unify_table_only(Range1, Range2, VarMap1);
+t_unify_table_only(?nominal_set([H1|T1], Str1), ?nominal_set([H2|T2], Str2), VarMap) ->
+  VarMap1 = t_unify_table_only(H1, H2, VarMap),
+  t_unify_table_only(?nominal_set(T1, Str1), ?nominal_set(T2, Str2), VarMap1);
+t_unify_table_only(?nominal_set([H1], S1), ?nominal_set([H2], S2), VarMap) ->
+  VarMap1 = t_unify_table_only(H1, H2, VarMap),
+  t_unify_table_only(S1, S2, VarMap1);
+t_unify_table_only(?nominal_set(_, _) = T1, ?nominal(_,_) = T2, VarMap) -> 
+  t_unify_table_only(T1, ?nominal_set(T2, ?none), VarMap);
+t_unify_table_only(?nominal(_,_) = T1, ?nominal_set(_,_) = T2, VarMap) ->
+  t_unify_table_only(T2, T1, VarMap);
+t_unify_table_only(?nominal(N1, S1)=T1, ?nominal(N2, S2)=T2, VarMap) ->
+  case N1 =:= N2 of
+    true -> t_unify_table_only(S1, S2, VarMap);
+    false -> throw({mismatch, T1, T2})
+  end;
+t_unify_table_only(?nominal(_, S1), T2, VarMap) ->
+  t_unify_table_only(S1, T2, VarMap);
+t_unify_table_only(T1, ?nominal(_, _)=T2, VarMap) ->
+  t_unify_table_only(T2, T1, VarMap);
+t_unify_table_only(?nominal_set([H], S1), T2, VarMap) ->
+  VarMap1 = t_unify_table_only(H, T2, VarMap),
+  t_unify_table_only(S1, T2, VarMap1);
+t_unify_table_only(?nominal_set([H|T], S1), T2, VarMap) ->
+  VarMap1 = t_unify_table_only(H, T2, VarMap),
+  t_unify_table_only(?nominal_set(T, S1), T2, VarMap1);
+t_unify_table_only(T1, ?nominal_set(_,_) = T2, VarMap) ->
+  t_unify_table_only(T2, T1, VarMap);
 t_unify_table_only(?list(Contents1, Termination1, Size),
 	?list(Contents2, Termination2, Size), VarMap) ->
   VarMap1 = t_unify_table_only(Contents1, Contents2, VarMap),
