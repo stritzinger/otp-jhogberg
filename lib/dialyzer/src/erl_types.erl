@@ -4003,12 +4003,12 @@ t_unopaque(?opaque(_) = T, Opaques) ->
     true -> t_unopaque(t_opaque_structure(T), Opaques);
     false -> T
   end;
-t_unopaque(?nominal(N, S), _) ->
-  ?nominal(N, t_unopaque(S));
-t_unopaque(?nominal_set([H], S), Opaques) ->
-  t_sup(t_unopaque(H, Opaques), t_unopaque(S));
-t_unopaque(?nominal_set([H|T], S), Opaques) ->
-  t_sup(t_unopaque(?nominal_set(T, S), Opaques), t_unopaque(H));
+t_unopaque(?nominal(_, S), Opaques) ->
+  t_unopaque(S, Opaques);
+t_unopaque(?nominal_set([], S), Opaques) ->
+  t_unopaque(S, Opaques);
+t_unopaque(?nominal_set([?nominal(_, S1)|T], S), Opaques) ->
+  t_unopaque(?nominal_set(T, t_sup(S, S1)), Opaques);
 t_unopaque(?list(ElemT, Termination, Sz), Opaques) ->
   ?list(t_unopaque(ElemT, Opaques), t_unopaque(Termination, Opaques), Sz);
 t_unopaque(?tuple(?any, _, _) = T, _) -> T;
@@ -5518,6 +5518,12 @@ do_opaque(?opaque(_) = Type, Opaques, Pred) ->
     true -> do_opaque(t_opaque_structure(Type), Opaques, Pred);
     false -> Pred(Type)
   end;
+do_opaque(?nominal_set([], S), Opaques, Pred) ->
+  do_opaque(S, Opaques, Pred);
+do_opaque(?nominal_set([?nominal(_, S1)|T], Str), Opaques, Pred) ->
+  do_opaque(?nominal_set(T, t_sup(Str, S1)), Opaques, Pred);
+do_opaque(?nominal(_, S), Opaques, Pred) ->
+  do_opaque(S, Opaques, Pred);
 do_opaque(?union(List) = Type, Opaques, Pred) ->
   ?untagged_union(A,B,F,I,L,N,T,O,Map) = List,
   if O =:= ?none -> Pred(Type);
