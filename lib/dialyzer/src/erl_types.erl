@@ -2584,10 +2584,19 @@ t_sup(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
 %% Union of 1 or more nominal types/nominal sets
 t_sup(?nominal(Name,S1), ?nominal(Name,S2)) ->
   ?nominal(Name, t_sup(S1, S2));
-t_sup(?nominal(N1,_)=T1, ?nominal(N2,_)=T2) ->
-  if
-    N1 < N2   -> ?nominal_set([T1,T2],?none);
-    N1 > N2   -> ?nominal_set([T2,T1],?none)
+t_sup(?nominal(N1, S1)=T1, ?nominal(N2, S2)=T2) ->
+  Sup1 = t_sup(T1, S2),
+  Sup2 = t_sup(T2, S1),
+  case {Sup1, Sup2} of
+    {?nominal(_, _), _} ->
+      ?nominal(N1, t_sup(S1, S2));
+    {_, ?nominal(_, _)} ->
+      ?nominal(N2, t_sup(S1, S2));
+    {_, _} ->
+      if
+        N1 < N2   -> ?nominal_set([T1,T2],?none);
+        N1 > N2   -> ?nominal_set([T2,T1],?none)
+      end
   end;
 t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
   U3 = t_sup(S1, S2),
@@ -2645,16 +2654,37 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
+check_nominal_acc(_, [], Acc) ->
+  lists:reverse(Acc);
+check_nominal_acc(?nominal(_,_) = T1, [H|T], Acc) ->
+  case t_sup(T1, H) of
+    ?nominal_set(_,_) -> [H|Acc];
+    ?nominal(_,_) = T -> [T|Acc]
+  end.
 
-
-sup_nominal_sets([?nominal(Name, S1)|Left1], [?nominal(Name, S2)|Left2], Acc) ->
-  NewAcc = [?nominal(Name, t_sup(S1, S2))|Acc],
-  sup_nominal_sets(Left1, Left2, NewAcc);
-sup_nominal_sets([?nominal(Name1, _) = T1|Left1] = L1,
-	       [?nominal(Name2, _) = T2|Left2] = L2, Acc) ->
-  % Refactor here to check for nested nominals
-  if Name1 < Name2 -> sup_nominal_sets(Left1, L2, [T1|Acc]);
-     Name1 > Name2 -> sup_nominal_sets(L1, Left2, [T2|Acc])
+sup_nominal_sets([?nominal(Name1, S1) = T1|Left1] = L1,
+	       [?nominal(Name2, S2) = T2|Left2] = L2, Acc) ->
+  if Name1 < Name2 -> 
+      NewAcc = check_nominal_acc(T1, Acc, []),
+      if NewAcc == Acc ->
+        sup_nominal_sets(Left1, L2, [T1|Acc]);
+      true ->
+        sup_nominal_sets(Left1, L2, NewAcc)
+      end;
+     Name1 > Name2 -> 
+      NewAcc = check_nominal_acc(T2, Acc, []),
+      if NewAcc == Acc ->
+        sup_nominal_sets(L1, Left2, [T2|Acc]);
+      true ->
+        sup_nominal_sets(L1, Left2, NewAcc)
+      end;
+     true ->
+      Sup = ?nominal(Name1, t_sup(S1, S2)),
+      NewAcc = check_nominal_acc(Sup, Acc, []),
+      if NewAcc == Acc ->
+        sup_nominal_sets(Left1, Left2, [Sup|Acc]);
+        true -> sup_nominal_sets(Left1, Left2, NewAcc)
+      end
   end;
 sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
 sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
@@ -2911,45 +2941,36 @@ t_inf(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, _Opaques) ->
       end, A, B),
   t_map(Pairs, t_inf(ADefK, BDefK), t_inf(ADefV, BDefV));
 %% Intersection of 1 or more nominal types
-t_inf(?nominal(N, S1), ?nominal(N, S2), _) ->
-  ?nominal(N, t_inf(S1,S2));
-t_inf(?nominal(_, _), ?nominal(_, _), _) ->
-  t_none();
-t_inf(?nominal_set(N1, S1),?nominal_set(N2, S2), Opaques) ->
-  inf_nominal_sets(N1,S1, N2, S2,[],Opaques);
-t_inf(?nominal_set([?nominal(N,S1)|_],Other1), ?nominal(N,S2)=T2, Opaques)-> 
-  case t_is_none_or_unit(t_inf(S1, S2, Opaques)) of
-    true -> t_inf(T2, Other1, Opaques);
-    false -> ?nominal(N, t_inf(S1, S2, Opaques))
+t_inf(?nominal_set(LHS_Ns, LHS_S),?nominal_set(RHS_Ns, RHS_S), Opaques) ->
+  inf_nominal_sets(LHS_Ns, LHS_S, RHS_Ns, RHS_S, [], Opaques);
+t_inf(?nominal_set(LHS_Ns, LHS_S), ?nominal(_, _)=RHS, Opaques) ->
+  inf_nominal_sets(LHS_Ns, LHS_S, [RHS], ?none, [], Opaques);
+t_inf(?nominal(_, _)=LHS, ?nominal_set(RHS_Ns, RHS_S), Opaques) ->
+  inf_nominal_sets([LHS], ?none, RHS_Ns, RHS_S, [], Opaques);
+t_inf(?nominal_set(LHS_Ns, LHS_S), RHS, Opaques) ->
+  inf_nominal_sets([], RHS, LHS_Ns, LHS_S, [], Opaques);
+t_inf(LHS, ?nominal_set(RHS_Ns, RHS_Ss), Opaques) ->
+  inf_nominal_sets([], LHS, RHS_Ns, RHS_Ss, [], Opaques);
+t_inf(?nominal(LHS_Name, LHS_S), ?nominal(RHS_Name, RHS_S), Opaques) ->
+  Inf = t_inf(LHS_S, RHS_S, Opaques),
+  case t_inf(LHS_S, RHS_S, Opaques) of
+    ?nominal(LHS_Name, S) -> ?nominal(RHS_Name, S);
+    ?nominal(RHS_Name, S) -> ?nominal(LHS_Name, S);
+    Inf when  LHS_Name =:= RHS_Name ->
+      case t_is_none_or_unit(Inf) of
+        true -> ?none;
+        false -> ?nominal(LHS_Name, Inf)
+      end;
+    _ -> ?none
   end;
-t_inf(?nominal_set([?nominal(_,_)],S1), ?nominal(_,_)=T2, Opaques) -> 
-  t_inf(T2, S1, Opaques);
-t_inf(?nominal_set([_|T],S), ?nominal(_,_) = N, Opaques) -> 
-  t_inf(?nominal_set(T,S), N, Opaques);
-t_inf(?nominal(_,_)=T1,?nominal_set(_,_)=T2,Opaques) ->
-  t_inf(T2,T1,Opaques);
-t_inf(?nominal(Name, S1), S2, Opaques) ->
-  Inf = t_inf(S1, S2, Opaques),
+t_inf(?nominal(LHS_Name, LHS_S), RHS_S, Opaques) ->
+  Inf = t_inf(LHS_S, RHS_S, Opaques),
   case t_is_none_or_unit(Inf) of
     true -> ?none;
-    false -> t_nominal(Name, Inf)
+    false -> t_nominal(LHS_Name, Inf)
   end;
-t_inf(A, ?nominal(_, _)=B, Opaques) ->
-  t_inf(B, A, Opaques);
-t_inf(?nominal_set([H],S1), S2, Opaques) ->
-  Inf = t_inf(S1, S2, Opaques),
-  case t_is_none_or_unit(Inf) of
-    true -> t_inf(H, S2, Opaques);
-    false -> Inf
-  end;
-t_inf(?nominal_set([H|T],S1), S2, Opaques) ->
-  Inf = t_inf(H, S2, Opaques),
-  case t_is_none_or_unit(Inf) of
-      true -> t_inf(?nominal_set(T,S1), S2, Opaques);
-      false -> t_sup(t_inf(?nominal_set(T,S1), S2, Opaques), Inf)
-  end;
-t_inf(S, ?nominal_set(_,_)=T2, Opaques) ->
-  t_inf(T2, S, Opaques);
+t_inf(LHS, ?nominal(_, _)=RHS, Opaques) ->
+  t_inf(RHS, LHS, Opaques);
 t_inf(?nil, ?nil, _Opaques) -> ?nil;
 t_inf(?nil, ?nonempty_list(_, _), _Opaques) ->
   ?none;
@@ -3189,23 +3210,49 @@ t_inf_lists_strict([T1|Left1], [T2|Left2], Acc, Opaques) ->
 t_inf_lists_strict([], [], Acc, _Opaques) ->
   lists:reverse(Acc).
 
+check_nominal_inf_acc(_, [], Acc) ->
+  lists:reverse(Acc);
+check_nominal_inf_acc(?nominal(_,_) = T1, [H|T], Acc) ->
+  case t_inf(T1, H) of
+    ?none -> [H|Acc];
+    ?nominal(_,_) = T -> [T|Acc]
+  end.
+
 inf_nominal_sets([], Str1, [], Str2, [], _) -> t_inf(Str1, Str2);
 inf_nominal_sets([], Str1, [], Str2, Acc, _) -> ?nominal_set(lists:reverse(Acc), t_inf(Str1, Str2));
 inf_nominal_sets([?nominal(Name, S1)|Ts1], Str1, [?nominal(Name, S2)|Ts2], Str2, Acc, Opaques) ->
   case t_is_none_or_unit(t_inf(S1, S2)) of
     true -> inf_nominal_sets(Ts1, Str1, Ts2, Str2, Acc, Opaques);
-    false -> inf_nominal_sets(Ts1, Str1, Ts2, Str2, [?nominal(Name, t_inf(S1, S2))|Acc], Opaques)
+    false -> 
+      NewAcc = check_nominal_inf_acc(?nominal(Name, t_inf(S1, S2)), Acc, []),
+      if NewAcc == Acc ->
+        inf_nominal_sets(Ts1, Str1, Ts2, Str2, [?nominal(Name, t_inf(S1, S2))|Acc], Opaques);
+      true ->
+        inf_nominal_sets(Ts1, Str1, Ts2, Str2, NewAcc, Opaques)
+      end
   end;
 inf_nominal_sets([?nominal(Name1, S1)|Ts1] = L1, Str1, [?nominal(Name2, S2)|Ts2] = L2, Str2, Acc, Opaques) ->
   if Name1 < Name2 -> 
       case t_is_none_or_unit(t_inf(S1, Str2)) of 
         true -> inf_nominal_sets(Ts1, Str1, L2, Str2, Acc, Opaques);
-        false -> inf_nominal_sets(Ts1, Str1, L2, Str2, [?nominal(Name1, t_inf(S1, Str2))|Acc], Opaques)
+        false -> 
+          NewAcc = check_nominal_inf_acc(?nominal(Name1, t_inf(S1, Str2)), Acc, []),
+          if NewAcc == Acc ->
+            inf_nominal_sets(Ts1, Str1, L2, Str2, [?nominal(Name1, t_inf(S1, Str2))|Acc], Opaques);
+          true ->
+            inf_nominal_sets(Ts1, Str1, L2, Str2, NewAcc, Opaques)
+          end
       end;
      Name1 > Name2 -> 
       case t_is_none_or_unit(t_inf(S2, Str1)) of 
         true -> inf_nominal_sets(L1, Str1, Ts2, Str2, Acc, Opaques);
-        false -> inf_nominal_sets(L1, Str1, Ts2, Str2, [?nominal(Name2, t_inf(S2, Str1))|Acc], Opaques)
+        false -> 
+          NewAcc = check_nominal_inf_acc(?nominal(Name1, t_inf(S2, Str1)), Acc, []),
+          if NewAcc == Acc ->
+            inf_nominal_sets(L1, Str1, Ts2, Str2, [?nominal(Name2, t_inf(S2, Str1))|Acc], Opaques);
+          true ->
+            inf_nominal_sets(L1, Str1, Ts2, Str2, NewAcc, Opaques)
+          end
       end
   end;
 inf_nominal_sets([], Str1, [?nominal(Name2, S2)|Ts2], Str2, Acc, Opaques) -> 
