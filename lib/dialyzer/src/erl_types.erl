@@ -2645,11 +2645,14 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
+
+
 sup_nominal_sets([?nominal(Name, S1)|Left1], [?nominal(Name, S2)|Left2], Acc) ->
   NewAcc = [?nominal(Name, t_sup(S1, S2))|Acc],
   sup_nominal_sets(Left1, Left2, NewAcc);
 sup_nominal_sets([?nominal(Name1, _) = T1|Left1] = L1,
 	       [?nominal(Name2, _) = T2|Left2] = L2, Acc) ->
+  % Refactor here to check for nested nominals
   if Name1 < Name2 -> sup_nominal_sets(Left1, L2, [T1|Acc]);
      Name1 > Name2 -> sup_nominal_sets(L1, Left2, [T2|Acc])
   end;

@@ -29,7 +29,7 @@
 
 -import(erl_types,
         [t_inf/2, t_inf/3, t_inf_lists/2, t_inf_lists/3,
-         t_is_equal/2, t_is_subtype/2, t_subtract/2,
+         t_is_equal/2, t_subtract/2,
          t_sup/1, t_sup/2]).
 
 -import(erl_types,
@@ -2232,13 +2232,13 @@ bind_eqeq_guard_lit_other(Guard, Arg1, Arg2, Map, Env, State) ->
     Term ->
       LitType = t_from_term(Term),
       {Map1, Type} = bind_guard(Arg2, Map, Env, Eval, State),
-      case t_is_subtype(LitType, Type) of
-	false -> signal_guard_fail(Eval, Guard, [Type, LitType], State);
-	true ->
-	  case cerl:is_c_var(Arg2) of
-	    true -> {enter_type(Arg2, LitType, Map1), t_atom(true)};
-	    false -> {Map1, t_atom(true)}
-	  end
+      case t_is_none(t_inf(LitType, Type)) of
+    true -> signal_guard_fail(Eval, Guard, [Type, LitType], State);
+    false ->
+      case cerl:is_c_var(Arg2) of
+        true -> {enter_type(Arg2, LitType, Map1), t_atom(true)};
+        false -> {Map1, t_atom(true)}
+      end
       end
   end.
 
