@@ -210,9 +210,7 @@
 	 var_table__new/0,
 	 cache__new/0,
 	 module_type_deps_of_type_defs/1,
-   type_form_to_remote_modules/1,
-   sup_nominal_sets/3,
-   check_nominal_acc/3
+   type_form_to_remote_modules/1
 	]).
 
 -compile({no_auto_import,[min/2,max/2,map_get/2]}).
@@ -2654,7 +2652,6 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
--spec check_nominal_acc(any(), any(), any()) -> any().
 check_nominal_acc(_, [], Acc) ->
   lists:reverse(Acc);
 check_nominal_acc(?nominal(_,_) = T1, [H|T], Acc) ->
@@ -2663,7 +2660,6 @@ check_nominal_acc(?nominal(_,_) = T1, [H|T], Acc) ->
     ?nominal(_,_) -> check_nominal_acc(T1, T, [t_sup(T1, H)|Acc])
   end.
 
--spec sup_nominal_sets(any(), any(), any()) -> any().
 sup_nominal_sets([], [], Acc) -> lists:reverse(Acc);
 sup_nominal_sets([?nominal(Name1, S1) = T1|Left1] = L1,
 	       [?nominal(Name2, S2) = T2|Left2] = L2, Acc) ->
