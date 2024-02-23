@@ -2932,13 +2932,14 @@ t_inf(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, _Opaques) ->
   t_map(Pairs, t_inf(ADefK, BDefK), t_inf(ADefV, BDefV));
 %% Intersection of 1 or more nominal types
 t_inf(?nominal_set(LHS_Ns, LHS_S),?nominal_set(RHS_Ns, RHS_S), Opaques) ->
-  inf_nominal_sets(LHS_Ns, RHS_Ns, t_inf(LHS_S, RHS_S), Opaques);
+  inf_nominal_sets(LHS_Ns, RHS_Ns, t_inf(LHS_S, RHS_S, Opaques), Opaques);
 t_inf(?nominal_set(LHS_Ns, LHS_S), ?nominal(_, _)=RHS, Opaques) ->
   inf_nominal_sets(LHS_Ns, [RHS], LHS_S, Opaques);
-t_inf(?nominal(_, _)=LHS, ?nominal_set(_, _)=LHS, Opaques) ->
+t_inf(?nominal(_, _)=LHS, ?nominal_set(_, _)=RHS, Opaques) ->
   t_inf(RHS, LHS, Opaques);
 t_inf(?nominal_set(LHS_Ns, LHS_S), RHS, Opaques) ->
-  normalize_nominal_set([t_inf(T, RHS) || T <- LHS_Ns], t_inf(LHS_S, RHS));
+  Ns = [t_inf(T, RHS, Opaques) || T <- LHS_Ns],
+  normalize_nominal_set(Ns, t_inf(LHS_S, RHS, Opaques), []);
 t_inf(LHS, ?nominal_set(_, _)=RHS, Opaques) ->
   t_inf(RHS, LHS, Opaques);
 t_inf(?nominal(Same, LHS_S), ?nominal(Same, RHS_S), Opaques) ->
@@ -3223,17 +3224,9 @@ t_inf_lists_strict([T1|Left1], [T2|Left2], Acc, Opaques) ->
 t_inf_lists_strict([], [], Acc, _Opaques) ->
   lists:reverse(Acc).
 
-check_nominal_inf_acc(_, [], Acc) ->
-  lists:reverse(Acc);
-check_nominal_inf_acc(?nominal(_,_) = T1, [H|T], Acc) ->
-  case t_inf(T1, H) of
-    ?none -> check_nominal_inf_acc(T1, T, [H|Acc]);
-    ?nominal(_,_) = T -> check_nominal_inf_acc(T1, T, [T|Acc])
-  end.
-
 inf_nominal_sets(Left, Right, Other, Opaques) ->
   case inf_nominal_sets_1(Left, Right, Opaques) of
-    [_|_]=Ns -> ?nominal_set(Ns, Other)
+    [_|_]=Ns -> ?nominal_set(Ns, Other);
     [] -> Other
   end.
 
@@ -3244,8 +3237,8 @@ inf_nominal_sets_1([?nominal(Same, _) = LHS | Left],
     ?nominal(_, _) = Inf -> [Inf | inf_nominal_sets_1(Left, Right, Opaques)];
     ?none -> inf_nominal_sets_1(Left, Right, Opaques)
   end;
-inf_nominal_sets_1([?nominal(LHS_Name, _) = LHS | Left] = Left0,
-                   [?nominal(RHS_Name, _) = RHS | Right] = Right0,
+inf_nominal_sets_1([?nominal(LHS_Name, _) | Left] = Left0,
+                   [?nominal(RHS_Name, _) | Right] = Right0,
                    Opaques) ->
   case LHS_Name < RHS_Name of
     true -> inf_nominal_sets_1(Left, Right0, Opaques);
