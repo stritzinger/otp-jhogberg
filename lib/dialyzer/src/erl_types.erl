@@ -210,7 +210,9 @@
 	 var_table__new/0,
 	 cache__new/0,
 	 module_type_deps_of_type_defs/1,
-   type_form_to_remote_modules/1
+   type_form_to_remote_modules/1,
+   sup_nominal_sets/3,
+   check_nominal_acc/3
 	]).
 
 -compile({no_auto_import,[min/2,max/2,map_get/2]}).
@@ -2652,26 +2654,29 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
+-spec check_nominal_acc(any(), any(), any()) -> any().
 check_nominal_acc(_, [], Acc) ->
   lists:reverse(Acc);
 check_nominal_acc(?nominal(_,_) = T1, [H|T], Acc) ->
   case t_sup(T1, H) of
-    ?nominal_set(_,_) -> [H|Acc];
-    ?nominal(_,_) = T -> [T|Acc]
+    ?nominal_set(_,_) -> check_nominal_acc(T1, T, [H|Acc]);
+    ?nominal(_,_) -> check_nominal_acc(T1, T, [t_sup(T1, H)|Acc])
   end.
 
+-spec sup_nominal_sets(any(), any(), any()) -> any().
+sup_nominal_sets([], [], Acc) -> lists:reverse(Acc);
 sup_nominal_sets([?nominal(Name1, S1) = T1|Left1] = L1,
 	       [?nominal(Name2, S2) = T2|Left2] = L2, Acc) ->
   if Name1 < Name2 -> 
       NewAcc = check_nominal_acc(T1, Acc, []),
-      if NewAcc == Acc ->
+      if NewAcc =:= Acc ->
         sup_nominal_sets(Left1, L2, [T1|Acc]);
       true ->
         sup_nominal_sets(Left1, L2, NewAcc)
       end;
      Name1 > Name2 -> 
       NewAcc = check_nominal_acc(T2, Acc, []),
-      if NewAcc == Acc ->
+      if NewAcc =:= Acc ->
         sup_nominal_sets(L1, Left2, [T2|Acc]);
       true ->
         sup_nominal_sets(L1, Left2, NewAcc)
@@ -2679,13 +2684,20 @@ sup_nominal_sets([?nominal(Name1, S1) = T1|Left1] = L1,
      true ->
       Sup = ?nominal(Name1, t_sup(S1, S2)),
       NewAcc = check_nominal_acc(Sup, Acc, []),
-      if NewAcc == Acc ->
+      if NewAcc =:= Acc ->
         sup_nominal_sets(Left1, Left2, [Sup|Acc]);
         true -> sup_nominal_sets(Left1, Left2, NewAcc)
       end
   end;
-sup_nominal_sets([], L2, Acc) -> lists:reverse(Acc, L2);
-sup_nominal_sets(L1, [], Acc) -> lists:reverse(Acc, L1).
+sup_nominal_sets([], [H|T], Acc) -> 
+  NewAcc = check_nominal_acc(H, Acc, []),
+  if NewAcc =:= Acc ->
+        sup_nominal_sets([], T, [H|Acc]);
+      true ->
+        sup_nominal_sets([], T, NewAcc)
+      end;
+sup_nominal_sets(L1, [], Acc) -> sup_nominal_sets([], L1, Acc).
+
 
 normalize_nominal_set(_, ?any, _) -> ?any;
 normalize_nominal_set([], AccS, []) -> AccS;
@@ -3239,7 +3251,7 @@ check_nominal_inf_acc(?nominal(_,_) = T1, [H|T], Acc) ->
     ?nominal(_,_) = T -> [T|Acc]
   end.
 
-inf_nominal_sets([], Str1, [], Str2, [], _) -> t_inf(Str1, Str2);
+inf_nominal_sets([], Str1, [], Str2, [], Opaques) -> t_inf(Str1, Str2, Opaques);
 inf_nominal_sets([], Str1, [], Str2, Acc, _) ->
   case {Acc, t_inf(Str1, Str2)} of
     {[Res], ?none} -> Res;
