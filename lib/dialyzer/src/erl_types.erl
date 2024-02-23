@@ -2598,25 +2598,22 @@ t_sup(?nominal(N1, S1)=T1, ?nominal(N2, S2)=T2) ->
         N1 > N2   -> ?nominal_set([T2,T1],?none)
       end
   end;
-t_sup(?nominal_set(N1,S1),?nominal_set(N2,S2)) ->
-  U3 = t_sup(S1, S2),
-  NU1 = sup_nominal_sets(N1,N2,[]),
-  normalize_nominal_set(NU1, U3, []);
-t_sup(?nominal_set(_,_) = T1,?nominal(_,_) = T2) -> 
-  t_sup(T1,?nominal_set([T2],?none));
-t_sup(?nominal(_,_)=T1,?nominal_set(_,_) = T2) ->
-  t_sup(T2,T1);
+t_sup(?nominal_set(LHS_Ns, LHS_S), ?nominal_set(RHS_Ns, RHS_S)) ->
+  sup_nominal_sets(LHS_Ns, RHS_Ns, t_sup(LHS_S, RHS_S));
+t_sup(?nominal_set(LHS_Ns, LHS_S), ?nominal(_, _)=RHS) ->
+  sup_nominal_sets(LHS_Ns, [RHS], LHS_S);
+t_sup(?nominal(_,_)=T1, ?nominal_set(_,_) = T2) ->
+  t_sup(T2, T1);
 t_sup(?nominal(_,S1)=T1, S2) ->
   Inf = t_inf(S1, S2),
   case t_is_none_or_unit(Inf) of
-    true -> 
-      ?nominal_set([T1],S2);
+    true -> ?nominal_set([T1],S2);
     false -> t_sup(S1, S2)
   end;
 t_sup(S1, ?nominal(_,_)=T2) ->
   t_sup(T2,S1);
 t_sup(?nominal_set(N1,S1),S2) ->
-  normalize_nominal_set(N1,t_sup(S1,S2),[]);
+  normalize_nominal_set(N1, t_sup(S1,S2), []);
 t_sup(S,?nominal_set(_,_)=T2) ->
   t_sup(T2,S);
 t_sup(T1, T2) ->
@@ -2652,61 +2649,41 @@ t_sup_lists([T1|Left1], [T2|Left2]) ->
 t_sup_lists([], []) ->
   [].
 
-check_nominal_acc(_, [], Acc) ->
-  lists:reverse(Acc);
-check_nominal_acc(?nominal(_,_) = T1, [H|T], Acc) ->
-  case t_sup(T1, H) of
-    ?nominal_set(_,_) -> check_nominal_acc(T1, T, [H|Acc]);
-    ?nominal(_,_) -> check_nominal_acc(T1, T, [t_sup(T1, H)|Acc])
-  end.
+sup_nominal_sets(Left, Right, Other) ->
+  normalize_nominal_set(sup_nominal_sets_1(Left, Right), Other, []).
 
-sup_nominal_sets([], [], Acc) -> lists:reverse(Acc);
-sup_nominal_sets([?nominal(Name1, S1) = T1|Left1] = L1,
-	       [?nominal(Name2, S2) = T2|Left2] = L2, Acc) ->
-  if Name1 < Name2 -> 
-      NewAcc = check_nominal_acc(T1, Acc, []),
-      if NewAcc =:= Acc ->
-        sup_nominal_sets(Left1, L2, [T1|Acc]);
-      true ->
-        sup_nominal_sets(Left1, L2, NewAcc)
-      end;
-     Name1 > Name2 -> 
-      NewAcc = check_nominal_acc(T2, Acc, []),
-      if NewAcc =:= Acc ->
-        sup_nominal_sets(L1, Left2, [T2|Acc]);
-      true ->
-        sup_nominal_sets(L1, Left2, NewAcc)
-      end;
-     true ->
-      Sup = ?nominal(Name1, t_sup(S1, S2)),
-      NewAcc = check_nominal_acc(Sup, Acc, []),
-      if NewAcc =:= Acc ->
-        sup_nominal_sets(Left1, Left2, [Sup|Acc]);
-        true -> sup_nominal_sets(Left1, Left2, NewAcc)
-      end
+sup_nominal_sets_1([?nominal(Same, _) = LHS | Left],
+                   [?nominal(Same, _) = RHS | Right]) ->
+  Sup = ?nominal(Same, _) = t_sup(LHS, RHS),    %Assertion.
+  [Sup | sup_nominal_sets_1(Left, Right)];
+sup_nominal_sets_1([?nominal(LHS_Name, _) = LHS | Left] = Left0,
+                   [?nominal(RHS_Name, _) = RHS | Right] = Right0) ->
+  case LHS_Name < RHS_Name of
+    true -> [LHS | sup_nominal_sets_1(Left, Right0)];
+    false -> [RHS | sup_nominal_sets_1(Left0, Right)]
   end;
-sup_nominal_sets([], [H|T], Acc) -> 
-  NewAcc = check_nominal_acc(H, Acc, []),
-  if NewAcc =:= Acc ->
-        sup_nominal_sets([], T, [H|Acc]);
-      true ->
-        sup_nominal_sets([], T, NewAcc)
-      end;
-sup_nominal_sets(L1, [], Acc) -> sup_nominal_sets([], L1, Acc).
+sup_nominal_sets_1([?nominal(_, _) = LHS | Left], []) ->
+  [LHS | sup_nominal_sets_1(Left, [])];
+sup_nominal_sets_1([], [?nominal(_, _) = RHS | Right]) ->
+  [RHS | sup_nominal_sets_1([], Right)];
+sup_nominal_sets_1([], []) ->
+  [].
 
 
-normalize_nominal_set(_, ?any, _) -> ?any;
-normalize_nominal_set([], AccS, []) -> AccS;
-normalize_nominal_set([], AccS, AccN) -> ?nominal_set(lists:reverse(AccN), AccS);
-normalize_nominal_set([?nominal(_,_) = Nominal| T], U3, AccN) -> 
-  case t_sup(Nominal, U3) of 
-    ?nominal_set(_,_) -> 
-      normalize_nominal_set(T, U3, [Nominal| AccN]);
+normalize_nominal_set(_, ?any, _) ->
+  ?any;
+normalize_nominal_set([], Other, []) ->
+  Other;
+normalize_nominal_set([], Other, Nominals) ->
+  ?nominal_set(lists:reverse(Nominals), Other);
+normalize_nominal_set([Type | Types], Other0, Nominals) ->
+  case t_sup(Type, Other0) of
+    ?nominal_set(_,_) ->
+      normalize_nominal_set(Types, Other0, [Type | Nominals]);
     ?nominal(_,_) ->
-      normalize_nominal_set(T, ?none, [Nominal| AccN]);
-    _ -> 
-      NewU = t_sup(Nominal, U3),
-      normalize_nominal_set(T++ AccN, NewU, [])
+      normalize_nominal_set(Types, ?none, [Type | Nominals]);
+    Other ->
+      normalize_nominal_set(Types ++ Nominals, Other, [])
   end.
 
 sup_tuple_sets(L1, L2) ->
@@ -3243,8 +3220,8 @@ check_nominal_inf_acc(_, [], Acc) ->
   lists:reverse(Acc);
 check_nominal_inf_acc(?nominal(_,_) = T1, [H|T], Acc) ->
   case t_inf(T1, H) of
-    ?none -> [H|Acc];
-    ?nominal(_,_) = T -> [T|Acc]
+    ?none -> check_nominal_inf_acc(T1, T, [H|Acc]);
+    ?nominal(_,_) = T -> check_nominal_inf_acc(T1, T, [T|Acc])
   end.
 
 inf_nominal_sets([], Str1, [], Str2, [], Opaques) -> t_inf(Str1, Str2, Opaques);
@@ -4167,6 +4144,10 @@ is_limited(?product(Elements), K) ->
   are_all_limited(Elements, K - 1);
 is_limited(?union(Elements), K) ->
   are_all_limited(Elements, K);
+is_limited(?nominal_set(Elements, S), K) ->
+  is_limited(S, K - 1) andalso are_all_limited(Elements, K - 1);
+is_limited(?nominal(_, S), K) ->
+  is_limited(S, K - 1);
 is_limited(?opaque(Es), K) ->
   lists:all(fun(#opaque{struct = S}) -> is_limited(S, K) end, Es);
 is_limited(?map(Pairs, DefK, DefV), K) ->
@@ -4216,6 +4197,12 @@ t_limit_k(?opaque(Es), K) ->
             Opaque#opaque{struct = NewS}
           end || #opaque{struct = S} = Opaque <- Es],
   ?opaque(ordsets:from_list(List));
+t_limit_k(?nominal(N, S), K) ->
+  ?nominal(N, t_limit_k(S, K - 1));
+t_limit_k(?nominal_set(Elements, S), K) ->
+  normalize_nominal_set([t_limit_k(X, K - 1) || X <- Elements],
+                        t_limit_k(S, K - 1),
+                        []);
 t_limit_k(?map(Pairs0, DefK0, DefV0), K) ->
   Fun = fun({EK, MNess, EV}, {Exact, DefK1, DefV1}) ->
 	    LV = t_limit_k(EV, K - 1),
