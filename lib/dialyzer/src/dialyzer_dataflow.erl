@@ -1268,9 +1268,9 @@ do_clause(C, Arg, ArgType, OrigArgType, Map, State, Warns) ->
       %% Now test whether the guard will succeed.
       case bind_guard(Guard, Map3, State) of
 	{error, Reason} ->
-	  ?debug("Failed guard: ~ts\n",
-		 [cerl_prettypr:format(C, [{hook, cerl_typean:pp_hook()}])]),
-          Warn = clause_guard_error(State, Reason, C, Pats, ArgType),
+	  ?debug("Failed guard: ~p\n",
+		 [C]),
+           Warn = clause_guard_error(State, Reason, C, Pats, ArgType),
           {State, Map, t_none(), NewArgType, [Warn|Warns]};
         Map4 ->
           Body = cerl:clause_body(C),
@@ -1878,11 +1878,11 @@ handle_guard_type_test(Guard, TypeTestType, Map, Env, Eval, State) ->
   {Map1, ArgType} = bind_guard(Arg, Map, Env, dont_know, State),
   case bind_type_test(Eval, TypeTestType, ArgType, State) of
     error ->
-      ?debug("Type test: ~w failed\n", [F]),
+      ?debug("Type test: ~w failed\n", [Guard]),
       signal_guard_fail(Eval, Guard, [ArgType], State);
     {ok, NewArgType, Ret} ->
       ?debug("Type test: ~w succeeded, NewType: ~ts, Ret: ~ts\n",
-	     [F, t_to_string(NewArgType), t_to_string(Ret)]),
+	     [Guard, t_to_string(NewArgType), t_to_string(Ret)]),
       {enter_type(Arg, NewArgType, Map1), Ret}
   end.
 
