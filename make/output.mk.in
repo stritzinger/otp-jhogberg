@@ -103,6 +103,10 @@ ld_verbose_0 = @echo " LD	"$@;
 ld_verbose = $(ld_verbose_$(V))
 V_LD = $(ld_verbose)$(LD)
 
+ldx_verbose_0 = @echo " LDX	"$@;
+ldx_verbose = $(ldx_verbose_$(V))
+V_LDX = $(ldx_verbose)$(LDX)
+
 leex_verbose_0 = @echo " LEEX	"$@;
 leex_verbose = $(leex_verbose_$(V))
 

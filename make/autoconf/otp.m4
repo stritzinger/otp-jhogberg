@@ -3074,6 +3074,7 @@ USER_LD=$LD
 USER_LDFLAGS="$LDFLAGS"
 
 DED_CC=$CC
+DED_CXX=$CXX
 DED_GCC=$GCC
 
 DED_CFLAGS=
@@ -3215,10 +3216,12 @@ case $host_os in
 		  fi
 		fi
 		DED_LD="$CC"
+		DED_LDX="$CXX"
 		DED_LD_FLAG_RUNTIME_LIBRARY_PATH="$CFLAG_RUNTIME_LIBRARY_PATH"
 	;;
 	linux*)
 		DED_LD="$CC"
+		DED_LDX="$CXX"
 		DED_LD_FLAG_RUNTIME_LIBRARY_PATH="$CFLAG_RUNTIME_LIBRARY_PATH"
 		DED_LDFLAGS="-shared -Wl,-Bsymbolic"
 		if test X${enable_m64_build} = Xyes; then
@@ -3230,6 +3233,7 @@ case $host_os in
 	;;	
 	freebsd*)
 		DED_LD="$CC"
+		DED_LDX="$CXX"
 		DED_LD_FLAG_RUNTIME_LIBRARY_PATH="$CFLAG_RUNTIME_LIBRARY_PATH"
 		DED_LDFLAGS="-shared"
 		if test X${enable_m64_build} = Xyes; then
@@ -3241,6 +3245,7 @@ case $host_os in
 	;;	
 	openbsd*)
 		DED_LD="$CC"
+		DED_LDX="$CXX"
 		DED_LD_FLAG_RUNTIME_LIBRARY_PATH="$CFLAG_RUNTIME_LIBRARY_PATH"
 		DED_LDFLAGS="-shared"
 	;;
@@ -3258,6 +3263,7 @@ esac
 
 if test "$DED_LD" = "" && test "$USER_LD" != ""; then
     DED_LD="$USER_LD"
+    DED_LDX="$USER_LD"
     DED_LDFLAGS="$USER_LDFLAGS $DED_LDFLAGS"
 fi
 
@@ -3279,8 +3285,14 @@ AC_MSG_RESULT([$DED_CFLAGS])
 AC_MSG_CHECKING(for compiler flags for loadable drivers)
 DED_CFLAGS="$DED_WERRORFLAGS $DED_WARN_FLAGS $DED_THR_DEFS $DED_CFLAGS"
 AC_MSG_RESULT([$DED_CFLAGS])
-AC_MSG_CHECKING(for linker for loadable drivers)
+AC_MSG_CHECKING(for compiler for loadable C drivers)
+AC_MSG_RESULT([$DED_CC])
+AC_MSG_CHECKING(for linker for loadable C drivers)
 AC_MSG_RESULT([$DED_LD])
+AC_MSG_CHECKING(for compiler for loadable C++ drivers)
+AC_MSG_RESULT([$DED_CXX])
+AC_MSG_CHECKING(for linker for loadable C++ drivers)
+AC_MSG_RESULT([$DED_LDX])
 AC_MSG_CHECKING(for linker flags for loadable drivers)
 AC_MSG_RESULT([$DED_LDFLAGS])
 AC_MSG_CHECKING(for 'runtime library path' linker flag)
@@ -3291,6 +3303,7 @@ else
 fi
 
 AC_SUBST(DED_CC)
+AC_SUBST(DED_CXX)
 AC_SUBST(DED_GCC)
 AC_SUBST(DED_EXT)
 AC_SUBST(DED_SYS_INCLUDE)
@@ -3301,6 +3314,7 @@ AC_SUBST(DED_STATIC_CFLAGS)
 AC_SUBST(DED_WARN_FLAGS)
 AC_SUBST(DED_WERRORFLAGS)
 AC_SUBST(DED_LD)
+AC_SUBST(DED_LDX)
 AC_SUBST(DED_LDFLAGS)
 AC_SUBST(DED_LD_FLAG_RUNTIME_LIBRARY_PATH)
 AC_SUBST(DED_LIBS)

@@ -22,7 +22,7 @@ include $(ERL_TOP)/make/$(TARGET)/otp.mk
 
 
 # These have to be built first
-ERTS_APPLICATIONS = stdlib sasl kernel compiler
+ERTS_APPLICATIONS = stdlib sasl kernel compiler smt
 
 # Then these have to be build
 ifdef TINY_BUILD

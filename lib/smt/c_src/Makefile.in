@@ -1,0 +1,156 @@
+#
+# %CopyrightBegin%
+#
+# Copyright Ericsson AB 2023. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# %CopyrightEnd%
+#
+include $(ERL_TOP)/make/target.mk
+include $(ERL_TOP)/make/$(TARGET)/otp.mk
+
+# ----------------------------------------------------
+# Application version
+# ----------------------------------------------------
+include ../vsn.mk
+VSN=$(SMT_VSN)
+
+# ----------------------------------------------------
+# The following variables differ between systems.
+# Set by configure.
+# ----------------------------------------------------
+CC = @DED_CC@
+CXX = @DED_CXX@
+LD = @DED_LD@
+LDX = @DED_LDX@
+SHELL = /bin/sh
+LIBS = @DED_LIBS@
+LDFLAGS = @DED_LDFLAGS@
+CFLAGS = @DED_CFLAGS@ @Z3_CFLAGS@
+Z3_LIBS = @Z3_LIBS@
+
+CXXFLAGS = $(filter-out -Werror=implicit -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement,$(CFLAGS)) @CXXFLAGS@
+
+# From configure
+
+INCLUDES = @DED_INCLUDE@
+
+ifeq ($(TYPE),debug)
+TYPEMARKER = .debug
+TYPE_FLAGS = $(subst -O3,,$(subst -O2,,$(CXXFLAGS))) -DDEBUG
+else
+ifeq ($(TYPE),valgrind)
+TYPEMARKER = .valgrind
+TYPE_FLAGS = $(subst -O3,,$(subst -O2,,$(CXXFLAGS))) -DVALGRIND
+else
+ifeq ($(TYPE),gprof)
+TYPEMARKER = .gprof
+TYPE_EXTRA_CFLAGS = -DGPROF -pg
+TYPE_FLAGS = $(CXXFLAGS) $(TYPE_EXTRA_CFLAGS)
+else
+ifeq ($(TYPE),asan)
+TYPEMARKER = .asan
+TYPE_FLAGS = $(CXXFLAGS) -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer -DADDRESS_SANITIZER
+LDFLAGS += -fsanitize=address
+else
+TYPEMARKER =
+TYPE_FLAGS = $(CXXFLAGS)
+endif
+endif
+endif
+endif
+
+# ----------------------------------------------------
+# Release directory specification
+# ----------------------------------------------------
+RELSYSDIR = $(RELEASE_PATH)/lib/smt-$(VSN)
+
+# ----------------------------------------------------
+# Misc Macros
+# ----------------------------------------------------
+
+PRIVDIR = ../priv
+OBJDIR = $(PRIVDIR)/obj/$(TARGET)
+LIBDIR = $(PRIVDIR)/lib/$(TARGET)
+
+Z3_OBJS = $(OBJDIR)/z3_nif$(TYPEMARKER).o
+Z3_LIB = $(LIBDIR)/z3_nif$(TYPEMARKER).@DED_EXT@
+
+ifeq ($(USING_VC),yes)
+AR_OUT=-out:
+AR_FLAGS=
+else
+AR_OUT=
+ifeq ($(V),0)
+AR_FLAGS=rc
+else
+AR_FLAGS=rcv
+endif
+endif
+
+ifndef RANLIB
+RANLIB=true
+endif
+
+ALL_CFLAGS = $(TYPE_FLAGS) $(EXTRA_FLAGS) $(INCLUDES)
+ALL_STATIC_CFLAGS = @DED_STATIC_CFLAGS@ $(TYPE_EXTRA_CFLAGS) $(INCLUDES)
+
+# ----------------------------------------------------
+# Targets
+# ----------------------------------------------------
+
+debug opt valgrind asan: $(Z3_LIB)
+
+$(OBJDIR)/%$(TYPEMARKER).o: %.cpp
+	$(V_at)$(INSTALL_DIR) $(OBJDIR)
+	$(V_CXX) -c -o $@ $(ALL_CFLAGS) $<
+
+$(LIBDIR)/z3_nif$(TYPEMARKER).so: $(Z3_OBJS)
+	$(V_at)$(INSTALL_DIR) $(LIBDIR)
+	$(V_LDX) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(Z3_LIBS)
+
+$(LIBDIR)/z3_nif$(TYPEMARKER).dll: $(Z3_OBJS)
+	$(V_at)$(INSTALL_DIR) $(LIBDIR)
+	$(V_LDX) $(LDFLAGS) -o $@ $(Z3_OBJS) $(Z3_LIBS)
+
+CLEAN_OBJS_RAW = $(Z3_OBJS)
+CLEAN_OBJS_O = $(patsubst %.debug.o,%.o,$(CLEAN_OBJS_RAW:.valgrind.o=.o))
+
+CLEAN_LIBS_RAW = $(Z3_LIB)
+CLEAN_LIBS_SO = $(patsubst %.debug.@DED_EXT@,%.@DED_EXT@,$(CLEAN_LIBS_RAW:.valgrind.@DED_EXT@=.@DED_EXT@))
+
+clean_dynamic_libs:
+	rm -f $(CLEAN_LIBS_SO)
+	rm -f $(foreach T,.valgrind.@DED_EXT@ .debug.@DED_EXT@ .asan.@DED_EXT@,$(CLEAN_LIBS_SO:.@DED_EXT@=$T))
+
+clean_objs:
+	rm -f $(CLEAN_OBJS_O)
+	rm -f $(foreach T,.valgrind.o .debug.o .asan.o,$(CLEAN_OBJS_O:.o=$T))
+
+clean: clean_objs clean_dynamic_libs
+	rm -f core *~
+
+docs:
+
+# ----------------------------------------------------
+# Release Target
+# ----------------------------------------------------
+include $(ERL_TOP)/make/otp_release_targets.mk
+
+release_spec: opt
+	$(INSTALL_DIR) "$(RELSYSDIR)/priv/lib"
+	$(INSTALL_PROGRAM) $(Z3_LIB) "$(RELSYSDIR)/priv/lib"
+
+release_docs_spec:
+
