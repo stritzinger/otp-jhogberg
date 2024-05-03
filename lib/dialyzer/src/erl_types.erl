@@ -2458,7 +2458,6 @@ t_sup_aux(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B) ->
 t_sup_aux(?nominal(Name,S1), ?nominal(Name,S2)) ->
   ?nominal(Name, t_sup_aux(S1, S2));
 t_sup_aux(?nominal(N1,_)=T1, ?nominal(N2, _)=T2) ->
-  
       if
         N1 < N2   -> ?nominal_set([T1,T2],?none);
         N1 > N2   -> ?nominal_set([T2,T1],?none)
@@ -2806,24 +2805,13 @@ t_inf_aux(?map(_, ADefK, ADefV) = A, ?map(_, BDefK, BDefV) = B, Opaques) ->
       end, A, B),
   t_map(Pairs, t_inf_aux(ADefK, BDefK, Opaques), t_inf_aux(ADefV, BDefV, Opaques));
 %% Intersection of 1 or more nominal types
-t_inf_aux(?nominal_set(LHS_Ns, LHS_S),?nominal_set(RHS_Ns, RHS_S), Opaques) ->
-  inf_nominal_sets(LHS_Ns, RHS_Ns, t_inf_aux(LHS_S, RHS_S, Opaques), Opaques);
-t_inf_aux(?nominal_set(LHS_Ns, LHS_S), ?nominal(_, _)=RHS, Opaques) ->
-   case inf_nominal_sets(LHS_Ns, [RHS], ?none, Opaques) of % this handles the case where LHS_Ns contains a supertype of RHS. 
-    ?nominal_set(_, ?none) = S -> % this case is for when RHS is a supertype of many nominal types
-      t_sup(S, t_inf_aux(LHS_S, RHS, Opaques)); 
-    ?nominal(N, S) -> 
-       %io:format("nominal_structure1~p~n", [S]),
-       %io:format("nominal_structure2~p~n", [t_sup_aux(S, LHS_S)]),
-       %io:format("RHS~p~n", [RHS]),
-       %io:format("Inf~p~n", [[?nominal(N, S), t_inf_aux(RHS, LHS_S, Opaques)]]),
-      t_sup_aux(?nominal(N, S), t_inf_aux(RHS, LHS_S, Opaques)); % because t_sup is used within normalization, we can prove that there's no overlap btw S and LHS_S
-    ?none -> 
-      %io:format("LHS~p~n", [[LHS_Ns, LHS_S, RHS]]),
-     t_inf_aux(RHS, LHS_S, Opaques)
-   end;
+t_inf_aux(?nominal_set(_, _) = LHS, ?nominal_set(_, _) = RHS, Opaques) ->
+  inf_nominal_sets(LHS, RHS, Opaques);
+t_inf_aux(?nominal_set(_, _)=LHS, ?nominal(_, _)=RHS, Opaques) ->
+  %% Deliberately pass a non-normalized nominal set to simplify the code.
+  t_inf_aux(LHS, ?nominal_set([RHS], ?none), Opaques);
 t_inf_aux(?nominal(_, _)=LHS, ?nominal_set(_, _)=RHS, Opaques) ->
-  t_inf_aux(RHS, LHS, Opaques);
+  t_inf_aux(RHS, ?nominal_set([LHS], ?none), Opaques);
 t_inf_aux(?nominal_set(LHS_Ns, LHS_S), RHS, Opaques) ->
   Ns = [t_inf_aux(T, RHS, Opaques) || T <- LHS_Ns],
   normalize_nominal_set(Ns, t_inf_aux(LHS_S, RHS, Opaques), []);
@@ -3120,30 +3108,56 @@ t_inf_lists_strict([T1|Left1], [T2|Left2], Acc, Opaques) ->
 t_inf_lists_strict([], [], Acc, _Opaques) ->
   lists:reverse(Acc).
 
-inf_nominal_sets(Left, Right, Other, Opaques) ->
-  normalize_nominal_set(inf_nominal_sets_1(Left, Right, Opaques), Other, []).
+inf_nominal_sets(?nominal_set(LHS_Ns0, LHS_S) = LHS,
+                 ?nominal_set(RHS_Ns0, RHS_S) = RHS, Opaques) ->
+  %% Because the structural part of one side can overlap with one or more of
+  %% the nominals on the other side, we need to cross the nominals that overlap
+  %% on each side and include them on the opposite side before intersecting the
+  %% list of nominals.
+  LHS_Ns = ins_cross(LHS_Ns0, LHS_S, RHS, Opaques),
+  RHS_Ns = ins_cross(RHS_Ns0, RHS_S, LHS, Opaques),
+  Inf_S = t_inf_aux(LHS_S, RHS_S, Opaques),
+  ins_intersect(LHS_Ns, RHS_Ns, Inf_S, Opaques).
 
-inf_nominal_sets_1([?nominal(Same, _) = LHS | Left],
-                   [?nominal(Same, _) = RHS | Right],
-                   Opaques) ->
+ins_cross(LHS_Ns, LHS_S, ?nominal_set(_, _) = RHS, Opaques) ->
+    Inf = case t_inf_aux(RHS, LHS_S, Opaques) of
+            ?nominal_set(RHS_InfNs, _) -> 
+              sup_nominal_sets(LHS_Ns, RHS_InfNs, ?none);
+            ?nominal(_, _)=LHS_N ->
+              sup_nominal_sets(LHS_Ns, [LHS_N], ?none);
+            _ ->
+              ?nominal_set(LHS_Ns, ?none)
+          end,
+    case Inf of
+        ?nominal_set(Ns, _) -> Ns;
+        ?nominal(_, _)=N -> [N];
+        ?none -> []
+    end.
+
+ins_intersect(Left, Right, Other, Opaques) ->
+  normalize_nominal_set(ins_intersect_1(Left, Right, Opaques), Other, []).
+
+ins_intersect_1([?nominal(Same, _) = LHS | Left],
+                [?nominal(Same, _) = RHS | Right],
+                Opaques) ->
   case t_inf_aux(LHS, RHS, Opaques) of
-    ?nominal(_, _) = Inf -> [Inf | inf_nominal_sets_1(Left, Right, Opaques)];
+    ?nominal(_, _) = Inf -> [Inf | ins_intersect_1(Left, Right, Opaques)];
     ?none -> 
-      inf_nominal_sets_1(Left, Right, Opaques)
+      ins_intersect_1(Left, Right, Opaques)
   end;
-inf_nominal_sets_1([?nominal(LHS_Name, _) = LHS | Left] = Left0,
-                   [?nominal(RHS_Name, _) = RHS | Right] = Right0,
-                   Opaques) ->
+ins_intersect_1([?nominal(LHS_Name, _) = LHS | Left] = Left0,
+                [?nominal(RHS_Name, _) = RHS | Right] = Right0,
+                Opaques) ->
   case t_inf_aux(LHS, RHS, Opaques) of 
-    ?nominal(_, _) = Inf -> [Inf | inf_nominal_sets_1(Left, Right, Opaques)];
+    ?nominal(_, _) = Inf -> [Inf | ins_intersect_1(Left, Right, Opaques)];
     ?none -> 
-      %io:format("LHS at inf_nominal_sets_1~p~n", [[LHS, RHS]]),
+      %io:format("LHS at ins_intersect_1~p~n", [[LHS, RHS]]),
       case LHS_Name < RHS_Name of
-        true -> inf_nominal_sets_1(Left, Right0, Opaques);
-        false -> inf_nominal_sets_1(Left0, Right, Opaques)
+        true -> ins_intersect_1(Left, Right0, Opaques);
+        false -> ins_intersect_1(Left0, Right, Opaques)
       end
   end;
-inf_nominal_sets_1(_Left, _Right, _Opaques) ->
+ins_intersect_1(_Left, _Right, _Opaques) ->
   [].
 
 inf_tuple_sets(L1, L2, Opaques) ->
@@ -4028,7 +4042,7 @@ is_limited(?product(Elements), K) ->
 is_limited(?union(Elements), K) ->
   are_all_limited(Elements, K);
 is_limited(?nominal_set(Elements, S), K) ->
-  is_limited(S, K - 1) andalso are_all_limited(Elements, K - 1);
+  is_limited(S, K) andalso are_all_limited(Elements, K);
 is_limited(?nominal(_, S), K) ->
   is_limited(S, K - 1);
 is_limited(?opaque(Es), K) ->
@@ -4092,7 +4106,10 @@ t_limit_k(?nominal(N, ?nominal_set(_, _)=S0), K) ->
       _ -> ?any 
   end;
 t_limit_k(?nominal(N, S), K) ->
-  ?nominal(N, t_limit_k(S, K - 1));
+  %% Do not decrease K: it causes catastrophic collapses of nominal sets as
+  %% ?any overlaps with all structural types. Nested nominals are handled in
+  %% the cases above, so we cannot miss the limit by more than one.
+  ?nominal(N, t_limit_k(S, K));
 t_limit_k(?nominal_set(Elements, S), K) ->
   normalize_nominal_set([t_limit_k(X, K) || X <- Elements],
                          t_limit_k(S, K),
@@ -4818,12 +4835,13 @@ type_from_form1(Name, Args, ArgsLen, R, TypeName, TypeNames, Site,
           Fun = fun(DD, LL) -> from_form(Form, S2, DD, LL, C1) end,
           {NewType, L3, C3} =
             case Tag of
-              type ->
-                recur_limit(Fun, D, L1, TypeName, TypeNames);
               nominal ->
                 {Rep, L2, C2} = recur_limit(Fun, D, L1, TypeName, TypeNames),
                 {t_nominal({Module, Name, ArgsLen, transparent}, Rep), L2, C2};
               opaque ->
+                {Rep, L2, C2} = recur_limit(Fun, D, L1, TypeName, TypeNames),
+                {t_nominal({Module, Name, ArgsLen, opaque}, Rep), L2, C2};
+              type ->
                 recur_limit(Fun, D, L1, TypeName, TypeNames)
             end,
           C4 = cache_put(CKey, NewType, L1 - L3, C3),
@@ -4891,13 +4909,14 @@ remote_from_form1(RemMod, Name, Args, ArgsLen, RemDict, RemType, TypeNames,
           Fun = fun(DD, LL) -> from_form(Form, S2, DD, LL, C1) end,
           {NewType, L3, C3} =
             case Tag of
-              type ->
-                recur_limit(Fun, D, L1, RemType, TypeNames);
-              opaque ->
-                recur_limit(Fun, D, L1, RemType, TypeNames);
               nominal ->
                 {NewRep, L2, C2} = recur_limit(Fun, D, L1, RemType, TypeNames),
-                {t_nominal({Mod, Name, ArgsLen, transparent}, NewRep), L2, C2}
+                {t_nominal({Mod, Name, ArgsLen, transparent}, NewRep), L2, C2};
+              opaque ->
+                {NewRep, L2, C2} = recur_limit(Fun, D, L1, RemType, TypeNames),
+                {t_nominal({Mod, Name, ArgsLen, opaque}, NewRep), L2, C2};
+              type ->
+                recur_limit(Fun, D, L1, RemType, TypeNames)
             end,
           C4 = cache_put(CKey, NewType, L1 - L3, C3),
           {NewType, L3, C4}
