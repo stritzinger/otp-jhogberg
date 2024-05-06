@@ -4094,22 +4094,15 @@ t_limit_k(?opaque(Es), K) ->
             Opaque#opaque{struct = NewS}
           end || #opaque{struct = S} = Opaque <- Es],
   ?opaque(ordsets:from_list(List));
-t_limit_k(?nominal(N, ?nominal(_, _)=S0), K) ->
-  case t_limit_k(S0, K - 1) of
-      ?nominal(_, _)=S -> ?nominal(N, S);
-      _ -> ?any 
+t_limit_k(?nominal(_, Inner)=T, K) ->
+  %% Nominals keep the most specific information at the topmost level, unlike
+  %% other types that keep it at the bottom. Hence, we should discard the outer
+  %% nominal without decrementing K whenever its inner structure is not
+  %% limited.
+  case is_limited(Inner, K - 1) of
+    true -> T;
+    false -> t_limit_k(Inner, K)
   end;
-t_limit_k(?nominal(N, ?nominal_set(_, _)=S0), K) ->
-  case t_limit_k(S0, K - 1) of
-      ?nominal_set(_, _)=S -> ?nominal(N, S);
-      ?nominal(_, _)=S -> ?nominal(N, S);
-      _ -> ?any 
-  end;
-t_limit_k(?nominal(N, S), K) ->
-  %% Do not decrease K: it causes catastrophic collapses of nominal sets as
-  %% ?any overlaps with all structural types. Nested nominals are handled in
-  %% the cases above, so we cannot miss the limit by more than one.
-  ?nominal(N, t_limit_k(S, K));
 t_limit_k(?nominal_set(Elements, S), K) ->
   normalize_nominal_set([t_limit_k(X, K) || X <- Elements],
                          t_limit_k(S, K),
