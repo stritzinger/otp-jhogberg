@@ -4012,8 +4012,8 @@ t_unopaque(T, _) ->
 
 t_limit(Term, K) when is_integer(K) ->
   case is_limited(Term, K) of
-    true -> Term;
-    false -> 
+    %%true -> Term;
+    _ -> 
       Res = t_limit_k(Term, K),
       case t_is_subtype(subst_all_vars_to_any(Term), subst_all_vars_to_any(Res)) of 
         true -> Res;
@@ -4023,6 +4023,8 @@ t_limit(Term, K) when is_integer(K) ->
       %Res
   end.
 
+%% FIXME: ensure that this _EXACTLY_ matches t_limit_k so that we can use it
+%% again.
 is_limited(?any, _) -> true;
 is_limited(_, K) when K =< 0 -> false;
 is_limited(?tuple(?any, ?any, ?any), _K) -> true;
@@ -4099,19 +4101,18 @@ t_limit_k(?opaque(Es), K) ->
             Opaque#opaque{struct = NewS}
           end || #opaque{struct = S} = Opaque <- Es],
   ?opaque(ordsets:from_list(List));
-t_limit_k(?nominal(_, Inner)=T, K) ->
+t_limit_k(?nominal(N, Inner), K) ->
   %% Nominals keep the most specific information at the topmost level, unlike
-  %% other types that keep it at the bottom. Hence, we should discard the outer
-  %% nominal without decrementing K whenever its inner structure is not
-  %% limited.
-  case is_limited(Inner, K - 1) of
-    true -> T;
-    false -> t_limit_k(Inner, K)
+  %% other types that keep it at the bottom. Hence we should discard the outer
+  %% nominal instead of the inner one when limiting.
+  case t_limit_k(Inner, K - 1) of
+    Inner -> ?nominal(N, Inner);
+    _Other -> t_limit_k(Inner, K)
   end;
 t_limit_k(?nominal_set(Elements, S), K) ->
   normalize_nominal_set([t_limit_k(X, K) || X <- Elements],
-                         t_limit_k(S, K),
-                         []);
+                        t_limit_k(S, K),
+                        []);
 t_limit_k(?map(Pairs0, DefK0, DefV0), K) ->
   Fun = fun({EK, MNess, EV}, {Exact, DefK1, DefV1}) ->
 	    LV = t_limit_k(EV, K - 1),
