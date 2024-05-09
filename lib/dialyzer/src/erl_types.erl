@@ -168,6 +168,7 @@
 	 t_number/0,
 	 t_number/1,
 	 t_number_vals/1, t_number_vals/2,
+         t_opacity_conflict/3,
 	 t_opaque_from_records/1,
 	 t_opaque_structure/1,
 	 t_pid/0,
@@ -304,12 +305,17 @@
 %% loops) and functions that never return because of a crash.
 -define(unit, unit).
 
+%% Special type used to mark opaque nominals during opacity violation checking.
+%%
+%% FIXME: Rename this to ?opaque once the old opaques have been chucked out.
+-define(opacity_marker, opacity_marker).
+
 %% Generic constructor - elements can be many things depending on the tag.
 -record(c, {tag                       :: tag(),
             elements  = []            :: term(),
             qualifier = ?unknown_qual :: qual()}).
 
--opaque erl_type() :: ?any | ?none | ?unit | #c{}.
+-opaque erl_type() :: ?any | ?none | ?unit | ?opacity_marker | #c{}.
 
 %%-----------------------------------------------------------------------------
 %% Auxiliary types and convenient macros
@@ -435,6 +441,49 @@ t_is_none(_) -> false.
 %%-----------------------------------------------------------------------------
 %% Opaque types
 %%
+
+%% Returns whether the `Given` type implicitly violates the opaque nominals of
+%% the `Required` type.
+-spec t_opacity_conflict(Given :: erl_type(),
+                         Required :: erl_type(),
+                         Module :: module()) -> boolean().
+t_opacity_conflict(Given, Required, Module) ->
+  %% The code below assumes that the actual types are compatible.
+  ?debug(not t_is_impossible(t_inf(Given, Required)),
+         {Given, Required, Module}),
+  t_is_impossible(t_inf(oc_mark(Given, Module),
+                        oc_mark(Required, Module))).
+
+oc_mark(?nominal({Mod, _Name, _Arity, Opacity}=Name, S0), Module) ->
+  case (Opacity =:= transparent) orelse (Mod =:= Module) of
+    true -> t_nominal(Name, oc_mark(S0, Module));
+    false -> t_nominal(Name, ?opacity_marker)
+  end;
+oc_mark(?nominal_set(Ns, Other), Module) ->
+  normalize_nominal_set([oc_mark(N, Module) || N <- Ns],
+                        oc_mark(Other, Module),
+                        []);
+oc_mark(?list(ElemT, Termination, Sz), Module) ->
+  ?list(oc_mark(ElemT, Module), oc_mark(Termination, Module), Sz);
+oc_mark(?tuple(?any, _, _) = T, _) -> T;
+oc_mark(?tuple(ArgTs, Sz, Tag), Module) when is_list(ArgTs) ->
+  ?tuple([oc_mark(A, Module) || A <- ArgTs], Sz, Tag);
+oc_mark(?tuple_set(Set0), Module) ->
+  ?tuple_set([{Sz, [oc_mark(T, Module) || T <- Tuples]}
+              || {Sz, Tuples} <- Set0]);
+oc_mark(?product(Types), Module) ->
+  ?product([oc_mark(T, Module) || T <- Types]);
+oc_mark(?function(Domain, Range), Module) ->
+  ?function(oc_mark(Domain, Module), oc_mark(Range, Module));
+oc_mark(?union(U0), Module) ->
+  ?union([oc_mark(T, Module) || T <- U0]);
+oc_mark(?map(Pairs, DefK, DefV), Module) ->
+  %% K is always a singleton, and thus can't contain any nominals.
+  t_map([{K, MNess, oc_mark(V, Module)} || {K, MNess, V} <- Pairs],
+        oc_mark(DefK, Module),
+        oc_mark(DefV, Module));
+oc_mark(T, _) ->
+  T.
 
 -spec t_opaque(module(), atom(), [_], erl_type()) -> erl_type().
 
@@ -625,7 +674,7 @@ t_find_unknown_opaque(T1, T2, Opaques) ->
 %% The first argument can contain opaque types. The second argument
 %% is assumed to be taken from the contract.
 
-t_decorate_with_opaque(T1, _, _) -> t_unopaque(T1).
+t_decorate_with_opaque(T1, _, _) -> T1.
 
 
 
@@ -1241,10 +1290,11 @@ is_nil(_) -> false.
 
 -spec t_nominal(any(), erl_type()) -> erl_type().
 
-t_nominal(_Name, ?none) ->
-  ?none;
-t_nominal(Name, Types) -> 
-  ?nominal(Name, Types).
+t_nominal(Name, Type) ->
+  case not t_is_impossible(Type) of
+    true -> ?nominal(Name, Type);
+    false -> ?none
+  end.
 
 -spec t_is_nominal(erl_type()) -> boolean().
 
@@ -2379,6 +2429,8 @@ t_sup_aux(T, ?none) -> T;
 t_sup_aux(?unit, T) -> T;
 t_sup_aux(T, ?unit) -> T;
 t_sup_aux(T, T) -> do_not_subst_all_vars_to_any(T);
+t_sup_aux(?opacity_marker, T) -> T;
+t_sup_aux(T, ?opacity_marker) -> T;
 t_sup_aux(?var(_), _) -> ?any;
 t_sup_aux(_, ?var(_)) -> ?any;
 t_sup_aux(?atom(Set1), ?atom(Set2)) ->
@@ -2958,6 +3010,10 @@ t_inf_aux(?tuple_set(List), ?tuple(_, Arity, _) = T, Opaques) ->
   inf_tuple_sets(List, [{Arity, [T]}], Opaques);
 t_inf_aux(?tuple(_, Arity, _) = T, ?tuple_set(List), Opaques) ->
   inf_tuple_sets(List, [{Arity, [T]}], Opaques);
+t_inf_aux(?opacity_marker, _, _Opaques) ->
+  ?none;
+t_inf_aux(_, ?opacity_marker, _Opaques) ->
+  ?none;
 %% be careful: here and in the next clause T can be ?opaque
 t_inf_aux(?union(U1), T, Opaques) ->
   ?union(U2) = force_union(T),
@@ -3971,9 +4027,10 @@ t_unopaque(?union(?untagged_union(A,B,F,I,L,N,T,O,Map)), Opaques) ->
             end,
   t_sup([?union([A,B,UF,I,UL,N,UT,OF,UMap])|UO]);
 t_unopaque(?map(Pairs,DefK,DefV), Opaques) ->
-  t_map([{K, MNess, t_unopaque(V, Opaques)} || {K, MNess, V} <- Pairs],
-	t_unopaque(DefK, Opaques),
-	t_unopaque(DefV, Opaques));
+  t_map([{t_unopaque(K, Opaques), MNess, t_unopaque(V, Opaques)}
+         || {K, MNess, V} <- Pairs],
+        t_unopaque(DefK, Opaques),
+        t_unopaque(DefV, Opaques));
 t_unopaque(T, _) ->
   T.
 
@@ -4035,7 +4092,9 @@ is_limited(?union(Elements), K) ->
 is_limited(?nominal_set(Elements, S), K) ->
   is_limited(S, K) andalso are_all_limited(Elements, K);
 is_limited(?nominal(_, S), K) ->
-  is_limited(S, K - 1);
+  %% To simplify checking opacity violations, nominals aren't counted in the
+  %% term depth.
+  is_limited(S, K);
 is_limited(?opaque(Es), K) ->
   lists:all(fun(#opaque{struct = S}) -> is_limited(S, K) end, Es);
 is_limited(?map(Pairs, DefK, DefV), K) ->
@@ -4085,14 +4144,10 @@ t_limit_k(?opaque(Es), K) ->
             Opaque#opaque{struct = NewS}
           end || #opaque{struct = S} = Opaque <- Es],
   ?opaque(ordsets:from_list(List));
-t_limit_k(?nominal(_, Inner)=T, K) ->
-  %% Nominals keep the most specific information at the topmost level, unlike
-  %% other types that keep it at the bottom. Hence we should discard the outer
-  %% nominal instead of the inner one when limiting.
-  case is_limited(Inner, K - 1) of
-    true -> T;
-    false -> t_limit_k(Inner, K)
-  end;
+t_limit_k(?nominal(Name, Inner), K) ->
+  %% To simplify checking opacity violations, nominals aren't counted in the
+  %% term depth.
+  ?nominal(Name, t_limit_k(Inner, K));
 t_limit_k(?nominal_set(Elements, S), K) ->
   normalize_nominal_set([t_limit_k(X, K) || X <- Elements],
                         t_limit_k(S, K),
@@ -5029,7 +5084,8 @@ separate_key(?number(_, _) = T) ->
   t_elements(T);
 separate_key(?union(List)) ->
   lists:append([separate_key(K) || K <- List, not t_is_none(K)]);
-separate_key(Key) -> [Key].
+separate_key(Key) ->
+  [Key].
 
 %% Sorts, combines non-singleton pairs, and applies precedence and
 %% mandatoriness rules.
@@ -5510,11 +5566,16 @@ t_is_singleton(Type, Opaques) ->
 
 %% To be in sync with separate_key/1.
 %% Used to also recognize maps and tuples.
-is_singleton_type(?nil) -> true;
-is_singleton_type(?atom(?any)) -> false;
-is_singleton_type(?atom([_])) -> true;
-is_singleton_type(?int_range(V, V)) -> true; % cannot happen
-is_singleton_type(?int_set([_])) -> true;
+is_singleton_type(?nil) ->
+  true;
+is_singleton_type(?atom(?any)) ->
+  false;
+is_singleton_type(?atom([_])) ->
+  true;
+is_singleton_type(?int_range(V, V)) ->
+  true; % cannot happen
+is_singleton_type(?int_set([_])) ->
+  true;
 is_singleton_type(_) ->
   false.
 

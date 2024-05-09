@@ -469,6 +469,17 @@ handle_apply_or_call([{TypeOfApply, {Fun, Sig, Contr, LocalRet}}|Left],
   ?debug("NewArgTypes ~ts\n", [erl_types:t_to_string(t_product(NewArgTypes))]),
   ?debug("\n", []),
 
+  case any_none(NewArgsContract) of
+    false ->
+      case erl_types:t_opacity_conflict(erl_types:t_product(ArgTypes),
+                                        erl_types:t_product(CArgs),
+                                        State#state.module) of
+        true -> io:format("~p~n", [{opacity_conflict, ArgTypes, CArgs, State#state.module, state__lookup_name(Fun, State)}]);
+        false -> ok
+      end;
+    true -> ok
+  end,
+
   BifRet = BifRange(NewArgTypes),
   ContrRet = CRange(NewArgTypes),
   RetWithoutContr = t_inf(SigRange, BifRet),
@@ -857,15 +868,15 @@ handle_call(Tree, Map, State) ->
   M = cerl:call_module(Tree),
   F = cerl:call_name(Tree),
   Args = cerl:call_args(Tree),
-  MFAList = [M, F|Args],
-  {State1, Map1, [MType0, FType0|As]} = traverse_list(MFAList, Map, State),
+  MFAList = [M, F | Args],
+  {State1, Map1, [MType0, FType0 | As]} = traverse_list(MFAList, Map, State),
   Opaques = State#state.opaques,
   MType = t_inf(t_module(), MType0, Opaques),
   FType = t_inf(t_atom(), FType0, Opaques),
   Map2 = enter_type_lists([M, F], [MType, FType], Map1),
   MOpaque = t_is_none(MType) andalso (not t_is_none(MType0)),
   FOpaque = t_is_none(FType) andalso (not t_is_none(FType0)),
-  case any_none([MType, FType|As]) of
+  case any_none([MType, FType | As]) of
     true ->
       State2 =
         if
