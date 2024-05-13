@@ -28,34 +28,33 @@
 -include("dialyzer.hrl").
 
 -import(erl_types,
-        [t_inf/2, t_inf/3, t_inf_lists/2, t_inf_lists/3,
+        [t_inf/2, t_inf_lists/2,
          t_is_equal/2, t_subtract/2,
          t_sup/1, t_sup/2]).
 
 -import(erl_types,
-	[any_none/1, t_any/0, t_atom/0, t_atom/1, t_atom_vals/1, t_atom_vals/2,
+	[any_none/1, t_any/0, t_atom/0, t_atom/1, t_atom_vals/1,
 	 t_binary/0, t_boolean/0,
 	 t_bitstr/0, t_bitstr/2, t_bitstr_concat/1, t_bitstr_match/2,
-	 t_cons/0, t_cons/2, t_cons_hd/2, t_cons_tl/2,
-         t_contains_opaque/2,
-	 t_find_opaque_mismatch/3, t_float/0, t_from_range/2, t_from_term/1,
-	 t_fun/0, t_fun/2, t_fun_args/1, t_fun_args/2, t_fun_range/1,
-	 t_fun_range/2, t_integer/0, t_integers/1,
-	 t_is_any/1, t_is_atom/1, t_is_atom/2, t_is_any_atom/3,
-         t_is_boolean/2,
-	 t_is_integer/2, t_is_list/1,
-	 t_is_nil/2, t_is_none/1, t_is_impossible/1,
-	 t_is_number/2, t_is_reference/2, t_is_pid/2, t_is_port/2,
+	 t_cons/0, t_cons/2, t_cons_hd/1, t_cons_tl/1,
+	 t_float/0, t_from_range/2, t_from_term/1,
+	 t_fun/0, t_fun/2, t_fun_args/1, t_fun_range/1,
+	 t_integer/0, t_integers/1,
+	 t_is_any/1, t_is_atom/1, t_is_any_atom/2,
+         t_is_boolean/1,
+	 t_is_integer/1, t_is_list/1,
+	 t_is_nil/1, t_is_none/1, t_is_impossible/1,
+	 t_is_number/1, t_is_reference/1, t_is_pid/1, t_is_port/1,
          t_is_unit/1,
-	 t_limit/2, t_list/0, t_list_elements/2,
+	 t_limit/2, t_list/0, t_list_elements/1,
 	 t_maybe_improper_list/0, t_module/0,
-	 t_none/0, t_non_neg_integer/0, t_number/0, t_number_vals/2,
+	 t_none/0, t_non_neg_integer/0, t_number/0, t_number_vals/1,
 	 t_pid/0, t_port/0, t_product/1, t_reference/0,
          t_to_string/2, t_to_tlist/1,
-	 t_tuple/0, t_tuple/1, t_tuple_args/1, t_tuple_args/2,
-         t_tuple_subtypes/2,
-	 t_unit/0, t_unopaque/2,
-	 t_map/0, t_map/1, t_is_singleton/2
+	 t_tuple/0, t_tuple/1, t_tuple_args/1,
+         t_tuple_subtypes/1,
+	 t_unit/0,
+	 t_map/0, t_map/1, t_is_singleton/1
      ]).
 
 %%-define(DEBUG, true).
@@ -87,7 +86,6 @@
                 fun_homes            :: dict:dict(label(), mfa()),
                 reachable_funs       :: sets:set(label()),
                 plt		     :: dialyzer_plt:plt(),
-                opaques              :: [type()],
 		records = dict:new() :: types(),
                 tree_map	     :: dict:dict(label(), cerl:cerl()),
 		warning_mode = false :: boolean(),
@@ -353,8 +351,7 @@ handle_apply(Tree, Map, State) ->
 					  Tree, Msg),
 	      {State3, Map2, t_none()};
 	    false ->
-	      NewArgs = t_inf_lists(ArgTypes,
-                                    t_fun_args(OpType1, 'universe')),
+	      NewArgs = t_inf_lists(ArgTypes, t_fun_args(OpType1)),
 	      case any_none(NewArgs) of
 		true ->
                   EnumNewArgs = lists:zip(lists:seq(1, length(NewArgs)),
@@ -371,7 +368,7 @@ handle_apply(Tree, Map, State) ->
 		  {State3, enter_type(Op, OpType1, Map2), t_none()};
 		false ->
 		  Map3 = enter_type_lists(Args, NewArgs, Map2),
-		  Range0 = t_fun_range(OpType1, 'universe'),
+		  Range0 = t_fun_range(OpType1),
 		  Range =
 		    case t_is_unit(Range0) of
 		      true  -> t_none();
@@ -413,7 +410,7 @@ handle_apply_or_call([{local, external}|Left], Args, ArgTypes, Map, Tree, State,
 		       ArgTypes, t_any(), true, NewWarns);
 handle_apply_or_call([{TypeOfApply, {Fun, Sig, Contr, LocalRet}}|Left],
 		     Args, ArgTypes, Map, Tree,
-                     #state{opaques = Opaques} = State,
+                     State,
                      AccArgTypes, AccRet, HadExternal, Warns) ->
   Any = t_any(),
   AnyArgs = [Any || _ <- Args],
@@ -435,7 +432,7 @@ handle_apply_or_call([{TypeOfApply, {Fun, Sig, Contr, LocalRet}}|Left],
 	    BArgs = erl_bif_types:arg_types(M, F, A),
 	    BRange =
 	      fun(FunArgs) ->
-		  erl_bif_types:type(M, F, A, FunArgs, Opaques)
+		  erl_bif_types:type(M, F, A, FunArgs)
 	      end,
 	    {BArgs, BRange};
           false ->
@@ -456,29 +453,29 @@ handle_apply_or_call([{TypeOfApply, {Fun, Sig, Contr, LocalRet}}|Left],
   ?debug("ArgTypes ~ts\n", [erl_types:t_to_string(t_product(ArgTypes))]),
   ?debug("BifArgs ~tp\n", [erl_types:t_to_string(t_product(BifArgs))]),
 
-  NewArgsSig = t_inf_lists(SigArgs, ArgTypes, Opaques),
+  NewArgsSig = t_inf_lists(SigArgs, ArgTypes),
   ?debug("SigArgs ~ts\n", [erl_types:t_to_string(t_product(SigArgs))]),
   ?debug("NewArgsSig: ~ts\n", [erl_types:t_to_string(t_product(NewArgsSig))]),
-  NewArgsContract = t_inf_lists(CArgs, ArgTypes, Opaques),
+  NewArgsContract = t_inf_lists(CArgs, ArgTypes),
   ?debug("NewArgsContract: ~ts\n",
 	 [erl_types:t_to_string(t_product(NewArgsContract))]),
-  NewArgsBif = t_inf_lists(BifArgs, ArgTypes, Opaques),
+  NewArgsBif = t_inf_lists(BifArgs, ArgTypes),
   ?debug("NewArgsBif: ~ts\n", [erl_types:t_to_string(t_product(NewArgsBif))]),
   NewArgTypes0 = t_inf_lists(NewArgsSig, NewArgsContract),
-  NewArgTypes = t_inf_lists(NewArgTypes0, NewArgsBif, Opaques),
+  NewArgTypes = t_inf_lists(NewArgTypes0, NewArgsBif),
   ?debug("NewArgTypes ~ts\n", [erl_types:t_to_string(t_product(NewArgTypes))]),
   ?debug("\n", []),
 
-  case any_none(NewArgsContract) of
-    false ->
-      case erl_types:t_opacity_conflict(erl_types:t_product(ArgTypes),
-                                        erl_types:t_product(CArgs),
-                                        State#state.module) of
-        true -> io:format("~p~n", [{opacity_conflict, ArgTypes, CArgs, State#state.module, state__lookup_name(Fun, State)}]);
-        false -> ok
-      end;
-    true -> ok
-  end,
+%   case any_none(NewArgsContract) of
+%     false ->
+%       case erl_types:t_opacity_conflict(erl_types:t_product(ArgTypes),
+%                                         erl_types:t_product(CArgs),
+%                                         State#state.module) of
+%         true -> io:format("~p~n", [{opacity_conflict, ArgTypes, CArgs, State#state.module, state__lookup_name(Fun, State)}]);
+%         false -> ok
+%       end;
+%     true -> ok
+%   end,
 
   BifRet = BifRange(NewArgTypes),
   ContrRet = CRange(NewArgTypes),
@@ -524,7 +521,7 @@ handle_apply_or_call([{TypeOfApply, {Fun, Sig, Contr, LocalRet}}|Left],
 	    FailReason =
 	      apply_fail_reason(FailedSig, FailedBif, FailedContract),
 	    Msg = get_apply_fail_msg(Fun, Args, ArgTypes, NewArgTypes, InfSig,
-				     Contr, CArgs, State, FailReason, Opaques),
+				     Contr, CArgs, State, FailReason),
 	    WarnType = case Msg of
 			 {call, _} -> ?WARN_FAILING_CALL;
 			 {apply, _} -> ?WARN_FAILING_CALL;
@@ -610,7 +607,7 @@ apply_fail_reason(FailedSig, FailedBif, FailedContract) ->
   end.
 
 get_apply_fail_msg(Fun, Args, ArgTypes, NewArgTypes,
-		   Sig, Contract, ContrArgs, State, FailReason, Opaques) ->
+		   Sig, Contract, _ContrArgs, State, FailReason) ->
   ArgStrings = format_args(Args, ArgTypes, State),
   ContractInfo =
     case Contract of
@@ -622,52 +619,12 @@ get_apply_fail_msg(Fun, Args, ArgTypes, NewArgTypes,
   EnumArgTypes = lists:zip(lists:seq(1, length(NewArgTypes)), NewArgTypes),
   ArgNs = [Arg || {Arg, Type} <- EnumArgTypes, t_is_none(Type)],
   case state__lookup_name(Fun, State) of
-    {M, F, A} ->
-      case is_opaque_type_test_problem(Fun, Args, NewArgTypes, State) of
-	{yes, Arg, ArgType} ->
-	  {opaque_type_test, [atom_to_list(F), ArgStrings,
-                              format_arg(Arg), format_type(ArgType, State)]};
-	no ->
-	  SigArgs = t_fun_args(Sig),
-          BadOpaque =
-            opaque_problems([SigArgs, ContrArgs], ArgTypes, Opaques, ArgNs),
-          %% In fact *both* 'call_with_opaque' and
-          %% 'call_without_opaque' are possible.
-          case lists:keyfind(decl, 1, BadOpaque) of
-            {decl, BadArgs} ->
-              %% a structured term is used where an opaque is expected
-              ExpectedTriples =
-                case FailReason of
-                  only_sig -> expected_arg_triples(BadArgs, SigArgs, State);
-                  _ -> expected_arg_triples(BadArgs, ContrArgs, State)
-                end,
-              {call_without_opaque, [M, F, ArgStrings, ExpectedTriples]};
-            false ->
-              case lists:keyfind(use, 1, BadOpaque) of
-                {use, BadArgs} ->
-                  %% an opaque term is used where a structured term is expected
-                  ExpectedArgs =
-                    case FailReason of
-                      only_sig -> SigArgs;
-                      _ -> ContrArgs
-                    end,
-                  {call_with_opaque, [M, F, ArgStrings, BadArgs, ExpectedArgs]};
-                false ->
-                  case
-                    erl_bif_types:opaque_args(M, F, A, ArgTypes, Opaques)
-                  of
-                    [] ->  %% there is a structured term clash in some argument
-                      {call, [M, F, ArgStrings,
-                              ArgNs, FailReason,
-                              format_sig_args(Sig, State),
-                              format_type(t_fun_range(Sig), State),
-                              ContractInfo]};
-                    Ns ->
-                      {call_with_opaque, [M, F, ArgStrings, Ns, ContrArgs]}
-                  end
-	      end
-	  end
-      end;
+    {M, F, _A} ->
+      {call, [M, F, ArgStrings,
+              ArgNs, FailReason,
+              format_sig_args(Sig, State),
+              format_type(t_fun_range(Sig), State),
+              ContractInfo]};
     Label when is_integer(Label) ->
       {apply, [ArgStrings,
 	       ArgNs, FailReason,
@@ -676,103 +633,39 @@ get_apply_fail_msg(Fun, Args, ArgTypes, NewArgTypes,
 	       ContractInfo]}
   end.
 
-%% -> [{ElementI, [ArgN]}] where [ArgN] is a non-empty list of
-%% arguments containing unknown opaque types and Element is 1 or 2.
-opaque_problems(ContractOrSigList, ArgTypes, Opaques, ArgNs) ->
-  ArgElementList = find_unknown(ContractOrSigList, ArgTypes, Opaques, ArgNs),
-  F = fun(1) -> decl; (2) -> use end,
-  [{F(ElementI), lists:usort([ArgN || {ArgN, EI} <- ArgElementList,
-                                      EI =:= ElementI])} ||
-    ElementI <- lists:usort([EI || {_, EI} <- ArgElementList])].
-
-%% -> [{ArgN, ElementI}] where ElementI = 1 means there is an unknown
-%% opaque type in argument ArgN of the the contract/signature,
-%% and ElementI = 2 means that there is an unknown opaque type in
-%% argument ArgN of the the (current) argument types.
-find_unknown(ContractOrSigList, ArgTypes, Opaques, NoneArgNs) ->
-  ArgNs = lists:seq(1, length(ArgTypes)),
-  [{ArgN, ElementI} ||
-    ContractOrSig <- ContractOrSigList,
-    {E1, E2, ArgN} <- lists:zip3(ContractOrSig, ArgTypes, ArgNs),
-    lists:member(ArgN, NoneArgNs),
-    ElementI <- erl_types:t_find_unknown_opaque(E1, E2, Opaques)].
-
-is_opaque_type_test_problem(Fun, Args, ArgTypes, State) ->
-  case Fun of
-    {erlang, FN, 2} when FN =:= is_function ->
-      type_test_opaque_arg(Args, ArgTypes, State#state.opaques);
-    {erlang, FN, 1} ->
-      case t_is_any(type_test_type(FN, 1)) of
-        true ->
-          no;
-        false ->
-          type_test_opaque_arg(Args, ArgTypes, State#state.opaques)
-      end;
-    _ ->
-      no
-  end.
-
-type_test_opaque_arg([], [], _Opaques) ->
-  no;
-type_test_opaque_arg([Arg|Args], [ArgType|ArgTypes], Opaques) ->
-  case erl_types:t_has_opaque_subtype(ArgType, Opaques) of
-    true -> {yes, Arg, ArgType};
-    false -> type_test_opaque_arg(Args, ArgTypes, Opaques)
-  end.
-
-expected_arg_triples(ArgNs, ArgTypes, State) ->
-  [begin
-     Arg = lists:nth(N, ArgTypes),
-     {N, Arg, format_type(Arg, State)}
-   end || N <- ArgNs].
-
 add_bif_warnings({erlang, Op, 2}, [T1, T2] = Ts, Tree, State)
   when Op =:= '=:='; Op =:= '==' ->
-  Opaques = State#state.opaques,
-  Inf = t_inf(T1, T2, Opaques),
+  Inf = t_inf(T1, T2),
   case
     t_is_none(Inf) andalso (not any_none(Ts))
-    andalso (not is_int_float_eq_comp(T1, Op, T2, Opaques))
+    andalso (not is_int_float_eq_comp(T1, Op, T2))
   of
     true ->
-      %% Give priority to opaque warning (as usual).
-      case erl_types:t_find_unknown_opaque(T1, T2, Opaques) of
-        [] ->
-          Args = comp_format_args([], T1, Op, T2, State),
-          state__add_warning(State, ?WARN_MATCHING, Tree, {exact_eq, Args});
-        Ns ->
-          Args = comp_format_args(Ns, T1, Op, T2, State),
-	  state__add_warning(State, ?WARN_OPAQUE, Tree, {opaque_eq, Args})
-      end;
+      Args = comp_format_args([], T1, Op, T2, State),
+      state__add_warning(State, ?WARN_MATCHING, Tree, {exact_eq, Args});
     false ->
       State
   end;
-add_bif_warnings({erlang, Op, 2}, [T1, T2] = Ts, Tree, State)
+add_bif_warnings({erlang, Op, 2}, [T1, T2] = Ts, _Tree, State)
   when Op =:= '=/='; Op =:= '/=' ->
-  Opaques = State#state.opaques,
   case
     (not any_none(Ts))
-    andalso (not is_int_float_eq_comp(T1, Op, T2, Opaques))
+    andalso (not is_int_float_eq_comp(T1, Op, T2))
   of
     true ->
-      case erl_types:t_find_unknown_opaque(T1, T2, Opaques) of
-        [] -> State;
-        Ns ->
-          Args = comp_format_args(Ns, T1, Op, T2, State),
-	  state__add_warning(State, ?WARN_OPAQUE, Tree, {opaque_neq, Args})
-      end;
+      State;
     false ->
       State
   end;
 add_bif_warnings(_, _, _, State) ->
   State.
 
-is_int_float_eq_comp(T1, Op, T2, Opaques) ->
+is_int_float_eq_comp(T1, Op, T2) ->
   (Op =:= '==' orelse Op =:= '/=') andalso
-    ((erl_types:t_is_float(T1, Opaques)
-      andalso t_is_integer(T2, Opaques)) orelse
-     (t_is_integer(T1, Opaques)
-      andalso erl_types:t_is_float(T2, Opaques))).
+    ((erl_types:t_is_float(T1)
+      andalso t_is_integer(T2)) orelse
+     (t_is_integer(T1)
+      andalso erl_types:t_is_float(T2))).
 
 comp_format_args([1|_], T1, Op, T2, State) ->
   [format_type(T2, State), Op, format_type(T1, State)];
@@ -838,24 +731,15 @@ handle_bitstr(Tree, Map, State) ->
 	  {State3, Map2, t_none()};
 	false ->
 	  UnitVal = cerl:concrete(cerl:bitstr_unit(Tree)),
-          Opaques = State2#state.opaques,
-          NumberVals = t_number_vals(SizeType, Opaques),
+          NumberVals = t_number_vals(SizeType),
           {State3, Type} =
-            case t_contains_opaque(SizeType, Opaques) of
-              true ->
-                Msg = {opaque_size, [format_type(SizeType, State2),
-                                     format_cerl(Size)]},
-                {state__add_warning(State2, ?WARN_OPAQUE, Size, Msg),
-                 t_none()};
-              false ->
-                case NumberVals of
-                  [OneSize] -> {State2, t_bitstr(0, OneSize * UnitVal)};
-                  unknown -> {State2, t_bitstr()};
-                  _ ->
-                    MinSize = erl_types:number_min(SizeType, Opaques),
-                    {State2, t_bitstr(UnitVal, UnitVal * MinSize)}
-                end
-            end,
+             case NumberVals of
+               [OneSize] -> {State2, t_bitstr(0, OneSize * UnitVal)};
+               unknown -> {State2, t_bitstr()};
+               _ ->
+                 MinSize = erl_types:number_min(SizeType),
+                 {State2, t_bitstr(UnitVal, UnitVal * MinSize)}
+             end,
 	  Map3 = enter_type_lists([Val, Size, Tree],
 				  [ValType, SizeType, Type], Map2),
 	  {State3, Map3, Type}
@@ -870,9 +754,8 @@ handle_call(Tree, Map, State) ->
   Args = cerl:call_args(Tree),
   MFAList = [M, F | Args],
   {State1, Map1, [MType0, FType0 | As]} = traverse_list(MFAList, Map, State),
-  Opaques = State#state.opaques,
-  MType = t_inf(t_module(), MType0, Opaques),
-  FType = t_inf(t_atom(), FType0, Opaques),
+  MType = t_inf(t_module(), MType0),
+  FType = t_inf(t_atom(), FType0),
   Map2 = enter_type_lists([M, F], [MType, FType], Map1),
   MOpaque = t_is_none(MType) andalso (not t_is_none(MType0)),
   FOpaque = t_is_none(FType) andalso (not t_is_none(FType0)),
@@ -962,7 +845,7 @@ handle_cons(Tree, Map, State) ->
   {State1, Map1, HdType} = traverse(Hd, Map, State),
   {State2, Map2, TlType} = traverse(Tl, Map1, State1),
   State3 =
-    case t_is_none(t_inf(TlType, t_list(), State2#state.opaques)) of
+    case t_is_none(t_inf(TlType, t_list())) of
       true ->
 	Msg = {improper_list_constr, [format_type(TlType, State2)]},
 	state__add_warning(State2, ?WARN_NON_PROPER_LIST, Tree, Msg);
@@ -1012,9 +895,8 @@ handle_primop(Tree, Map, State) ->
     recv_wait_timeout ->
       [Arg] = cerl:primop_args(Tree),
       {State1, Map1, TimeoutType} = traverse(Arg, Map, State),
-      Opaques = State1#state.opaques,
-      case t_is_atom(TimeoutType, Opaques) andalso
-        t_atom_vals(TimeoutType, Opaques) =:= ['infinity'] of
+      case t_is_atom(TimeoutType) andalso
+        t_atom_vals(TimeoutType) =:= ['infinity'] of
         true ->
           {State1, Map1, t_boolean()};
         false ->
@@ -1108,7 +990,7 @@ traverse_map_pairs([Pair|Pairs], Map, State, ShadowKeys, PairAcc, KeyAcc) ->
   {State1, Map1, [K,V]} = traverse_list([Key,Val],Map,State),
   KeyAcc1 =
     case cerl:is_literal(Op) andalso cerl:concrete(Op) =:= exact andalso
-      t_is_singleton(K, State#state.opaques) andalso
+      t_is_singleton(K) andalso
       t_is_none(t_inf(ShadowKeys, K)) of
       true -> [K|KeyAcc];
       false -> KeyAcc
@@ -1134,7 +1016,7 @@ handle_tuple(Tree, Map, State) ->
 	      TagVal = cerl:atom_val(Tag),
               case state__lookup_record(TagVal, length(Left), State1) of
                 error -> {State1, Map1, TupleType};
-                {ok, RecType, FieldNames} ->
+                {ok, RecType, _FieldNames} ->
                   InfTupleType = t_inf(RecType, TupleType),
                   case t_is_none(InfTupleType) of
                     true ->
@@ -1157,18 +1039,6 @@ handle_tuple(Tree, Map, State) ->
                           State2 = state__add_warning(State1, ?WARN_MATCHING,
                                                       LocTree, Msg),
                           {State2, Map1, t_none()};
-                        {error, opaque, ErrorPat, ErrorType, OpaqueType} ->
-                          OpaqueStr = format_type(OpaqueType, State1),
-                          Name = field_name(Elements, ErrorPat, FieldNames),
-                          Msg = {opaque_match,
-                                 ["record field" ++ Name ++
-                                  " declared to be of type " ++
-                                    format_type(ErrorType, State1),
-                                  OpaqueStr, OpaqueStr]},
-                          LocTree = hd(ErrorPat),
-                          State2 = state__add_warning(State1, ?WARN_OPAQUE,
-                                                      LocTree, Msg),
-                          {State2, Map1, t_none()};
                         {error, record, ErrorPat, ErrorType, _} ->
                           Msg = {record_match,
                                  [format_patterns(ErrorPat),
@@ -1187,15 +1057,6 @@ handle_tuple(Tree, Map, State) ->
 	[] ->
 	  {State1, Map1, t_tuple([])}
       end
-  end.
-
-field_name(Elements, ErrorPat, FieldNames) ->
-  try
-    [Pat] = ErrorPat,
-    Take = lists:takewhile(fun(X) -> X =/= Pat end, Elements),
-    " " ++ format_atom(lists:nth(length(Take), FieldNames))
-  catch
-    _:_ -> ""
   end.
 
 %%----------------------------------------
@@ -1451,7 +1312,6 @@ bind_pat_vars(Pats, Types, Map, State, Rev) ->
 
 do_bind_pat_vars([Pat|Pats], [Type|Types], Map, State, Rev, Acc) ->
   ?debug("Binding pat: ~tw to ~ts\n", [cerl:type(Pat), format_type(Type, State)]),
-  Opaques = State#state.opaques,
   {NewMap, TypeOut} =
     case cerl:type(Pat) of
       alias ->
@@ -1471,33 +1331,33 @@ do_bind_pat_vars([Pat|Pats], [Type|Types], Map, State, Rev, Acc) ->
             %% symmetric.
             {Map, t_bitstr()};
 	  false ->
-            BinType = bind_checked_inf(Pat, t_bitstr(), Type, Opaques),
+            BinType = bind_checked_inf(Pat, t_bitstr(), Type),
             Segs = cerl:binary_segments(Pat),
             {Map1, SegTypes} = bind_bin_segs(Segs, BinType, Map, State),
             {Map1, t_bitstr_concat(SegTypes)}
 	end;
       cons ->
-        Cons = bind_checked_inf(Pat, t_cons(), Type, Opaques),
+        Cons = bind_checked_inf(Pat, t_cons(), Type),
         {Map1, [HdType, TlType]} =
           do_bind_pat_vars([cerl:cons_hd(Pat), cerl:cons_tl(Pat)],
-                           [t_cons_hd(Cons, Opaques),
-                            t_cons_tl(Cons, Opaques)],
+                           [t_cons_hd(Cons),
+                            t_cons_tl(Cons)],
                            Map, State, Rev, []),
         {Map1, t_cons(HdType, TlType)};
       literal ->
 	Pat0 = dialyzer_utils:refold_pattern(Pat),
 	case cerl:is_literal(Pat0) of
 	  true ->
-            LiteralType = bind_checked_inf(Pat, literal_type(Pat), Type, Opaques),
+            LiteralType = bind_checked_inf(Pat, literal_type(Pat), Type),
             {Map, LiteralType};
 	  false ->
             {Map1, [PatType]} = do_bind_pat_vars([Pat0], [Type], Map, State, Rev, []),
 	    {Map1, PatType}
 	end;
       map ->
-        bind_map(Pat, Type, Map, State, Opaques, Rev);
+        bind_map(Pat, Type, Map, State, Rev);
       tuple ->
-        bind_tuple(Pat, Type, Map, State, Opaques, Rev);
+        bind_tuple(Pat, Type, Map, State, Rev);
       values ->
 	Es = cerl:values_es(Pat),
 	{Map1, EsTypes} = do_bind_pat_vars(Es, t_to_tlist(Type),
@@ -1510,7 +1370,7 @@ do_bind_pat_vars([Pat|Pats], [Type|Types], Map, State, Rev, Acc) ->
 	    {ok, RecType} -> RecType
 	  end,
 	%% Must do inf when binding args to pats. Vars in pats are fresh.
-        VarType2 = bind_checked_inf(Pat, VarType1, Type, Opaques),
+        VarType2 = bind_checked_inf(Pat, VarType1, Type),
         Map1 = enter_type(Pat, VarType2, Map),
         {Map1, VarType2};
       _Other ->
@@ -1523,8 +1383,8 @@ do_bind_pat_vars([Pat|Pats], [Type|Types], Map, State, Rev, Acc) ->
 do_bind_pat_vars([], [], Map, _State, _Rev, Acc) ->
   {Map, lists:reverse(Acc)}.
 
-bind_map(Pat, Type, Map, State, Opaques, Rev) ->
-  MapT = bind_checked_inf(Pat, t_map(), Type, Opaques),
+bind_map(Pat, Type, Map, State, Rev) ->
+  MapT = bind_checked_inf(Pat, t_map(), Type),
   case Rev of
     %% TODO: Reverse matching (propagating a matched subset back to a value).
     true ->
@@ -1549,7 +1409,7 @@ bind_map(Pat, Type, Map, State, Opaques, Rev) ->
             {MapAcc1, [ValType]} =
               do_bind_pat_vars([cerl:map_pair_val(Pair)],
                                [Bind], MapAcc, State, Rev, []),
-            case t_is_singleton(KeyType, Opaques) of
+            case t_is_singleton(KeyType) of
               true  -> {MapAcc1, [{KeyType, ValType}|ListAcc]};
               false -> {MapAcc1, ListAcc}
             end
@@ -1558,7 +1418,7 @@ bind_map(Pat, Type, Map, State, Opaques, Rev) ->
       {Map1, t_inf(MapT, t_map(Pairs))}
   end.
 
-bind_tuple(Pat, Type, Map, State, Opaques, Rev) ->
+bind_tuple(Pat, Type, Map, State, Rev) ->
   Es = cerl:tuple_es(Pat),
   {IsTypedRecord, Prototype} =
     case Es of
@@ -1581,28 +1441,23 @@ bind_tuple(Pat, Type, Map, State, Opaques, Rev) ->
             {false, t_tuple(length(Es))}
         end
     end,
-  Tuple = bind_checked_inf(Pat, Prototype, Type, Opaques),
-  SubTuples = t_tuple_subtypes(Tuple, Opaques),
+  Tuple = bind_checked_inf(Pat, Prototype, Type),
+  SubTuples = t_tuple_subtypes(Tuple),
   MapJ = join_maps_begin(Map),
   %% Need to call the top function to get the try-catch wrapper.
-  Results = [bind_pat_vars(Es, t_tuple_args(SubTuple, Opaques), MapJ, State, Rev) ||
+  Results = [bind_pat_vars(Es, t_tuple_args(SubTuple), MapJ, State, Rev) ||
               SubTuple <- SubTuples],
-  case lists:keyfind(opaque, 2, Results) of
-    {error, opaque, _PatList, _Type, Opaque} ->
-      bind_error([Pat], Tuple, Opaque, opaque);
-    false ->
-      case [M || {M, _} <- Results, M =/= error] of
-        [] ->
-          case IsTypedRecord of
-            true -> bind_error([Pat], Tuple, Prototype, record);
-            false -> bind_error([Pat], Tuple, t_none(), bind)
-          end;
-        Maps ->
-          Map1 = join_maps_end(Maps, MapJ),
-          TupleType = t_sup([t_tuple(EsTypes) ||
-                              {M, EsTypes} <- Results, M =/= error]),
-          {Map1, TupleType}
-      end
+  case [M || {M, _} <- Results, M =/= error] of
+    [] ->
+      case IsTypedRecord of
+        true -> bind_error([Pat], Tuple, Prototype, record);
+        false -> bind_error([Pat], Tuple, t_none(), bind)
+      end;
+    Maps ->
+      Map1 = join_maps_end(Maps, MapJ),
+      TupleType = t_sup([t_tuple(EsTypes) ||
+                          {M, EsTypes} <- Results, M =/= error]),
+      {Map1, TupleType}
   end.
 
 bind_bin_segs(BinSegs, BinType, Map, State) ->
@@ -1619,8 +1474,11 @@ bind_bin_segs([Seg|Segs], BinType, Acc, Map, State) ->
       T = t_inf(t_bitstr(UnitVal, 0), BinType),
       {Map1, [Type]} = do_bind_pat_vars([Val], [T], Map,
                                         State, false, []),
-      Type1 = remove_local_opaque_types(Type, State#state.opaques),
-      bind_bin_segs(Segs, t_bitstr(0, 0), [Type1|Acc], Map1, State);
+      bind_bin_segs(Segs,
+                    t_bitstr(0, 0),
+                    [erl_types:t_structural(Type) | Acc],
+                    Map1,
+                    State);
     SizeType when SegType =:= utf8; SegType =:= utf16; SegType =:= utf32 ->
       {literal, undefined} = SizeType,          %Assertion.
       {Map1, [_]} = do_bind_pat_vars([Val], [t_integer()],
@@ -1633,17 +1491,12 @@ bind_bin_segs([Seg|Segs], BinType, Acc, Map, State) ->
     _ ->
       {Map1, [SizeType]} = do_bind_pat_vars([Size], [t_non_neg_integer()],
                                             Map, State, false, []),
-      Opaques = State#state.opaques,
-      NumberVals = t_number_vals(SizeType, Opaques),
-      case t_contains_opaque(SizeType, Opaques) of
-        true -> bind_error([Seg], SizeType, t_none(), opaque);
-        false -> ok
-      end,
+      NumberVals = t_number_vals(SizeType),
       Type =
 	case NumberVals of
 	  [OneSize] -> t_bitstr(0, UnitVal * OneSize);
 	  _ -> % 'unknown' too
-	    MinSize = erl_types:number_min(SizeType, Opaques),
+	    MinSize = erl_types:number_min(SizeType),
 	    t_bitstr(UnitVal, UnitVal * MinSize)
 	end,
       ValConstr =
@@ -1689,18 +1542,11 @@ bitstr_bitsize_type(Size) ->
 
 %% Return the infimum (meet) of ExpectedType and Type if it describes a
 %% possible value (not 'none' or 'unit'), otherwise raise a bind_error().
-bind_checked_inf(Pat, ExpectedType, Type, Opaques) ->
-  Inf = t_inf(ExpectedType, Type, Opaques),
+bind_checked_inf(Pat, ExpectedType, Type) ->
+  Inf = t_inf(ExpectedType, Type),
   case t_is_impossible(Inf) of
-    true ->
-      case t_find_opaque_mismatch(ExpectedType, Type, Opaques) of
-        {ok, T1, T2} ->
-          bind_error([Pat], T1, T2, opaque);
-        error ->
-          bind_error([Pat], Type, Inf, bind)
-      end;
-    false ->
-      Inf
+    true -> bind_error([Pat], Type, Inf, bind);
+    false -> Inf
   end.
 
 bind_error(Pats, Type, OpaqueType, Error0) ->
@@ -1861,8 +1707,7 @@ handle_guard_call(Guard, Map, Env, Eval, State) ->
 handle_guard_gen_fun({M, F, A}, Guard, Map, Env, Eval, State) ->
   Args = cerl:call_args(Guard),
   {Map1, As} = bind_guard_list(Args, Map, Env, dont_know, State),
-  Opaques = State#state.opaques,
-  BifRet = erl_bif_types:type(M, F, A, As, Opaques),
+  BifRet = erl_bif_types:type(M, F, A, As),
   case t_is_none(BifRet) of
     true ->
       %% Is this an error-bif?
@@ -1872,7 +1717,7 @@ handle_guard_gen_fun({M, F, A}, Guard, Map, Env, Eval, State) ->
       end;
     false ->
       BifArgs = bif_args(M, F, A),
-      Map2 = enter_type_lists(Args, t_inf_lists(BifArgs, As, Opaques), Map1),
+      Map2 = enter_type_lists(Args, t_inf_lists(BifArgs, As), Map1),
       Ret = guard_eval_inf(Eval, BifRet),
       case t_is_none(Ret) of
 	true ->
@@ -1887,7 +1732,7 @@ handle_guard_gen_fun({M, F, A}, Guard, Map, Env, Eval, State) ->
 handle_guard_type_test(Guard, TypeTestType, Map, Env, Eval, State) ->
   [Arg] = cerl:call_args(Guard),
   {Map1, ArgType} = bind_guard(Arg, Map, Env, dont_know, State),
-  case bind_type_test(Eval, TypeTestType, ArgType, State) of
+  case bind_type_test(Eval, TypeTestType, ArgType) of
     error ->
       ?debug("Type test: ~w failed\n", [Guard]),
       signal_guard_fail(Eval, Guard, [ArgType], State);
@@ -1897,10 +1742,10 @@ handle_guard_type_test(Guard, TypeTestType, Map, Env, Eval, State) ->
       {enter_type(Arg, NewArgType, Map1), Ret}
   end.
 
-bind_type_test(Eval, Type, ArgType, State) ->
+bind_type_test(Eval, Type, ArgType) ->
   case Eval of
     pos ->
-      Inf = t_inf(Type, ArgType, State#state.opaques),
+      Inf = t_inf(Type, ArgType),
       case t_is_none(Inf) of
 	true -> error;
 	false -> {ok, Inf, t_atom(true)}
@@ -1940,10 +1785,9 @@ handle_guard_comp(Guard, Comp, Map, Env, Eval, State) ->
   Args = cerl:call_args(Guard),
   [Arg1, Arg2] = Args,
   {Map1, ArgTypes} = bind_guard_list(Args, Map, Env, dont_know, State),
-  Opaques = State#state.opaques,
   [Type1, Type2] = ArgTypes,
-  IsInt1 = t_is_integer(Type1, Opaques),
-  IsInt2 = t_is_integer(Type2, Opaques),
+  IsInt1 = t_is_integer(Type1),
+  IsInt2 = t_is_integer(Type2),
   case {type(Arg1), type(Arg2)} of
     {{literal, Lit1}, {literal, Lit2}} ->
       case erlang:Comp(cerl:concrete(Lit1), cerl:concrete(Lit2)) of
@@ -1956,13 +1800,13 @@ handle_guard_comp(Guard, Comp, Map, Env, Eval, State) ->
 	false when Eval =:= neg ->       {Map, t_atom(false)}
       end;
     {{literal, Lit1}, var} when IsInt1, IsInt2, Eval =:= pos ->
-      case bind_comp_literal_var(Lit1, Arg2, Type2, Comp, Map1, Opaques) of
+      case bind_comp_literal_var(Lit1, Arg2, Type2, Comp, Map1) of
 	error -> signal_guard_fail(Eval, Guard, ArgTypes, State);
 	{ok, NewMap} -> {NewMap, t_atom(true)}
       end;
     {var, {literal, Lit2}} when IsInt1, IsInt2, Eval =:= pos ->
       case bind_comp_literal_var(Lit2, Arg1, Type1, invert_comp(Comp),
-                                 Map1, Opaques) of
+                                 Map1) of
 	error -> signal_guard_fail(Eval, Guard, ArgTypes, State);
 	{ok, NewMap} -> {NewMap, t_atom(true)}
       end;
@@ -1975,10 +1819,10 @@ invert_comp('<')  -> '>';
 invert_comp('>=') -> '=<';
 invert_comp('>')  -> '<'.
 
-bind_comp_literal_var(Lit, Var, VarType, CompOp, Map, Opaques) ->
+bind_comp_literal_var(Lit, Var, VarType, CompOp, Map) ->
   LitVal = cerl:concrete(Lit),
   NewVarType =
-    case t_number_vals(VarType, Opaques) of
+    case t_number_vals(VarType) of
       unknown ->
 	Range =
 	  case CompOp of
@@ -1987,7 +1831,7 @@ bind_comp_literal_var(Lit, Var, VarType, CompOp, Map, Opaques) ->
 	    '>=' -> t_from_range(neg_inf, LitVal);
 	    '>'  -> t_from_range(neg_inf, LitVal - 1)
 	  end,
-	t_inf(Range, VarType, Opaques);
+	t_inf(Range, VarType);
       NumberVals ->
 	NewNumberVals = [X || X <- NumberVals, erlang:CompOp(LitVal, X)],
 	t_integers(NewNumberVals)
@@ -2001,18 +1845,17 @@ handle_guard_is_function(Guard, Map, Env, Eval, State) ->
   Args = cerl:call_args(Guard),
   {Map1, ArgTypes0} = bind_guard_list(Args, Map, Env, dont_know, State),
   [FunType0, ArityType0] = ArgTypes0,
-  Opaques = State#state.opaques,
-  ArityType = t_inf(ArityType0, t_integer(), Opaques),
+  ArityType = t_inf(ArityType0, t_integer()),
   case t_is_none(ArityType) of
     true -> signal_guard_fail(Eval, Guard, ArgTypes0, State);
     false ->
       FunTypeConstr =
-	case t_number_vals(ArityType, State#state.opaques) of
+	case t_number_vals(ArityType) of
 	  unknown -> t_fun();
 	  Vals ->
 	    t_sup([t_fun(lists:duplicate(X, t_any()), t_any()) || X <- Vals])
 	end,
-      FunType = t_inf(FunType0, FunTypeConstr, Opaques),
+      FunType = t_inf(FunType0, FunTypeConstr),
       case t_is_none(FunType) of
 	true ->
 	  case Eval of
@@ -2037,33 +1880,24 @@ handle_guard_is_record(Guard, Map, Env, Eval, State) ->
   Arity = cerl:int_val(Arity0),
   {Map1, RecType} = bind_guard(Rec, Map, Env, dont_know, State),
   ArityMin1 = Arity - 1,
-  Opaques = State#state.opaques,
   Tuple = t_tuple([t_atom(Tag)|lists:duplicate(ArityMin1, t_any())]),
-  case t_is_none(t_inf(Tuple, RecType, Opaques)) of
+  case t_is_none(t_inf(Tuple, RecType)) of
     true ->
-      case erl_types:t_has_opaque_subtype(RecType, Opaques) of
-        true ->
-          signal_guard_fail(Eval, Guard,
-                            [RecType, t_from_term(Tag),
-                             t_from_term(Arity)],
-                            State);
-        false ->
-          case Eval of
-            pos -> signal_guard_fail(Eval, Guard,
-                                     [RecType, t_from_term(Tag),
-                                      t_from_term(Arity)],
-                                     State);
-            neg -> {Map1, t_atom(false)};
-            dont_know -> {Map1, t_atom(false)}
-          end
-      end;
+        case Eval of
+          pos -> signal_guard_fail(Eval, Guard,
+                                   [RecType, t_from_term(Tag),
+                                    t_from_term(Arity)],
+                                   State);
+          neg -> {Map1, t_atom(false)};
+          dont_know -> {Map1, t_atom(false)}
+        end;
     false ->
       TupleType =
         case state__lookup_record(Tag, ArityMin1, State) of
           error -> Tuple;
           {ok, Prototype, _FieldNames} -> Prototype
         end,
-      Type = t_inf(TupleType, RecType, State#state.opaques),
+      Type = t_inf(TupleType, RecType),
       case t_is_none(Type) of
         true ->
           %% No special handling of opaque errors.
@@ -2128,21 +1962,12 @@ handle_guard_eq(Guard, Map, Env, Eval, State) ->
 bind_eq_guard(Guard, Arg1, Arg2, Map, Env, Eval, State) ->
   {Map1, Type1} = bind_guard(Arg1, Map, Env, dont_know, State),
   {Map2, Type2} = bind_guard(Arg2, Map1, Env, dont_know, State),
-  Opaques = State#state.opaques,
   case
-    t_is_nil(Type1, Opaques) orelse t_is_nil(Type2, Opaques)
-    orelse t_is_atom(Type1, Opaques) orelse t_is_atom(Type2, Opaques)
+    t_is_nil(Type1) orelse t_is_nil(Type2)
+    orelse t_is_atom(Type1) orelse t_is_atom(Type2)
   of
     true -> bind_eqeq_guard(Guard, Arg1, Arg2, Map, Env, Eval, State);
-    false ->
-      %% XXX. Is this test OK?
-      OpArgs = erl_types:t_find_unknown_opaque(Type1, Type2, Opaques),
-      case OpArgs =:= [] of
-        true ->
-          {Map2, guard_eval_inf(Eval, t_boolean())};
-        false ->
-          signal_guard_fail(Eval, Guard, [Type1, Type2], State)
-      end
+    false -> {Map2, guard_eval_inf(Eval, t_boolean())}
   end.
 
 handle_guard_eqeq(Guard, Map, Env, Eval, State) ->
@@ -2181,20 +2006,13 @@ bind_eqeq_guard(Guard, Arg1, Arg2, Map, Env, Eval, State) ->
   {Map2, Type2} = bind_guard(Arg2, Map1, Env, dont_know, State),
   ?debug("Types are:~ts =:= ~ts\n", [t_to_string(Type1),
                                      t_to_string(Type2)]),
-  Opaques = State#state.opaques,
-  Inf = t_inf(Type1, Type2, Opaques),
+  Inf = t_inf(Type1, Type2),
   case t_is_none(Inf) of
     true ->
-      OpArgs = erl_types:t_find_unknown_opaque(Type1, Type2, Opaques),
-      case OpArgs =:= [] of
-        true ->
-          case Eval of
-            neg -> {Map2, t_atom(false)};
-            dont_know -> {Map2, t_atom(false)};
-            pos -> signal_guard_fail(Eval, Guard, [Type1, Type2], State)
-          end;
-        false ->
-          signal_guard_fail(Eval, Guard, [Type1, Type2], State)
+      case Eval of
+        neg -> {Map2, t_atom(false)};
+        dont_know -> {Map2, t_atom(false)};
+        pos -> signal_guard_fail(Eval, Guard, [Type1, Type2], State)
       end;
     false ->
       case Eval of
@@ -2222,11 +2040,10 @@ bind_eqeq_guard(Guard, Arg1, Arg2, Map, Env, Eval, State) ->
 
 bind_eqeq_guard_lit_other(Guard, Arg1, Arg2, Map, Env, State) ->
   Eval = dont_know,
-  Opaques = State#state.opaques,
   case cerl:concrete(Arg1) of
     true ->
       {_, Type} = MT = bind_guard(Arg2, Map, Env, pos, State),
-      case t_is_any_atom(true, Type, Opaques) of
+      case t_is_any_atom(true, Type) of
 	true -> MT;
 	false ->
 	  {_, Type0} = bind_guard(Arg2, Map, Env, Eval, State),
@@ -2234,7 +2051,7 @@ bind_eqeq_guard_lit_other(Guard, Arg1, Arg2, Map, Env, State) ->
       end;
     false ->
       {Map1, Type} = bind_guard(Arg2, Map, Env, neg, State),
-      case t_is_any_atom(false, Type, Opaques) of
+      case t_is_any_atom(false, Type) of
 	true -> {Map1, t_atom(true)};
 	false ->
 	  {_, Type0} = bind_guard(Arg2, Map, Env, Eval, State),
@@ -2255,15 +2072,14 @@ bind_eqeq_guard_lit_other(Guard, Arg1, Arg2, Map, Env, State) ->
 
 handle_guard_and(Guard, Map, Env, Eval, State) ->
   [Arg1, Arg2] = cerl:call_args(Guard),
-  Opaques = State#state.opaques,
   case Eval of
     pos ->
       {Map1, Type1} = bind_guard(Arg1, Map, Env, Eval, State),
-      case t_is_any_atom(true, Type1, Opaques) of
+      case t_is_any_atom(true, Type1) of
 	false -> signal_guard_fail(Eval, Guard, [Type1, t_any()], State);
 	true ->
 	  {Map2, Type2} = bind_guard(Arg2, Map1, Env, Eval, State),
-	  case t_is_any_atom(true, Type2, Opaques) of
+	  case t_is_any_atom(true, Type2) of
 	    false -> signal_guard_fail(Eval, Guard, [Type1, Type2], State);
 	    true -> {Map2, t_atom(true)}
 	  end
@@ -2279,8 +2095,8 @@ handle_guard_and(Guard, Map, Env, Eval, State) ->
 	catch throw:{fail, _} -> bind_guard(Arg1, MapJ, Env, pos, State)
 	end,
       case
-        t_is_any_atom(false, Type1, Opaques)
-        orelse t_is_any_atom(false, Type2, Opaques)
+        t_is_any_atom(false, Type1)
+        orelse t_is_any_atom(false, Type2)
       of
 	true -> {join_maps_end([Map1, Map2], MapJ), t_atom(false)};
 	false -> signal_guard_fail(Eval, Guard, [Type1, Type2], State)
@@ -2296,7 +2112,7 @@ handle_guard_and(Guard, Map, Env, Eval, State) ->
 	false ->
 	  NewMap = join_maps_end([Map1, Map2], MapJ),
 	  NewType =
-	    case {t_atom_vals(Bool1, Opaques), t_atom_vals(Bool2, Opaques)} of
+	    case {t_atom_vals(Bool1), t_atom_vals(Bool2)} of
 	      {['true'] , ['true'] } -> t_atom(true);
 	      {['false'], _        } -> t_atom(false);
 	      {_        , ['false']} -> t_atom(false);
@@ -2313,7 +2129,6 @@ handle_guard_and(Guard, Map, Env, Eval, State) ->
 
 handle_guard_or(Guard, Map, Env, Eval, State) ->
   [Arg1, Arg2] = cerl:call_args(Guard),
-  Opaques = State#state.opaques,
   case Eval of
     pos ->
       MapJ = join_maps_begin(Map),
@@ -2328,22 +2143,22 @@ handle_guard_or(Guard, Map, Env, Eval, State) ->
 	  throw:{fail,_} -> bind_guard(Arg2, MapJ, Env, dont_know, State)
 	end,
       case
-        ((t_is_any_atom(true, Bool1, Opaques)
-          andalso t_is_boolean(Bool2, Opaques))
+        ((t_is_any_atom(true, Bool1)
+          andalso t_is_boolean(Bool2))
          orelse
-           (t_is_any_atom(true, Bool2, Opaques)
-            andalso t_is_boolean(Bool1, Opaques)))
+           (t_is_any_atom(true, Bool2)
+            andalso t_is_boolean(Bool1)))
       of
 	true -> {join_maps_end([Map1, Map2], MapJ), t_atom(true)};
 	false -> signal_guard_fail(Eval, Guard, [Bool1, Bool2], State)
       end;
     neg ->
       {Map1, Type1} = bind_guard(Arg1, Map, Env, neg, State),
-      case t_is_any_atom(false, Type1, Opaques) of
+      case t_is_any_atom(false, Type1) of
 	false -> signal_guard_fail(Eval, Guard, [Type1, t_any()], State);
 	true ->
 	  {Map2, Type2} = bind_guard(Arg2, Map1, Env, neg, State),
-	  case t_is_any_atom(false, Type2, Opaques) of
+	  case t_is_any_atom(false, Type2) of
 	    false -> signal_guard_fail(Eval, Guard, [Type1, Type2], State);
 	    true -> {Map2, t_atom(false)}
 	  end
@@ -2359,7 +2174,7 @@ handle_guard_or(Guard, Map, Env, Eval, State) ->
 	false ->
 	  NewMap = join_maps_end([Map1, Map2], MapJ),
 	  NewType =
-	    case {t_atom_vals(Bool1, Opaques), t_atom_vals(Bool2, Opaques)} of
+	    case {t_atom_vals(Bool1), t_atom_vals(Bool2)} of
 	      {['false'], ['false']} -> t_atom(false);
 	      {['true'] , _        } -> t_atom(true);
 	      {_        , ['true'] } -> t_atom(true);
@@ -2375,11 +2190,10 @@ handle_guard_or(Guard, Map, Env, Eval, State) ->
 
 handle_guard_not(Guard, Map, Env, Eval, State) ->
   [Arg] = cerl:call_args(Guard),
-  Opaques = State#state.opaques,
   case Eval of
     neg ->
       {Map1, Type} = bind_guard(Arg, Map, Env, pos, State),
-      case t_is_any_atom(true, Type, Opaques) of
+      case t_is_any_atom(true, Type) of
 	true -> {Map1, t_atom(false)};
 	false ->
 	  {_, Type0} = bind_guard(Arg, Map, Env, Eval, State),
@@ -2387,7 +2201,7 @@ handle_guard_not(Guard, Map, Env, Eval, State) ->
       end;
     pos ->
       {Map1, Type} = bind_guard(Arg, Map, Env, neg, State),
-      case t_is_any_atom(false, Type, Opaques) of
+      case t_is_any_atom(false, Type) of
 	true -> {Map1, t_atom(true)};
 	false ->
 	  {_, Type0} = bind_guard(Arg, Map, Env, Eval, State),
@@ -2399,7 +2213,7 @@ handle_guard_not(Guard, Map, Env, Eval, State) ->
       case t_is_none(Bool) of
 	true -> throw({fatal_fail, none});
 	false ->
-	  case t_atom_vals(Bool, Opaques) of
+	  case t_atom_vals(Bool) of
 	    ['true'] -> {Map1, t_atom(false)};
 	    ['false'] -> {Map1, t_atom(true)};
 	    [_, _] -> {Map1, Bool};
@@ -2466,18 +2280,12 @@ signal_guard_fatal_fail(Eval, Guard, ArgTypes, State) ->
 signal_guard_failure(Eval, Guard, ArgTypes, Tag, State) ->
   Args = cerl:call_args(Guard),
   F = cerl:atom_val(cerl:call_name(Guard)),
-  {M, F, A} = MFA = {cerl:atom_val(cerl:call_module(Guard)), F, length(Args)},
-  Opaques = State#state.opaques,
-  {Kind, XInfo} =
-    case erl_bif_types:opaque_args(M, F, A, ArgTypes, Opaques) of
-      [] ->
-        {case Eval of
-           neg -> neg_guard_fail;
-           pos -> guard_fail;
-           dont_know -> guard_fail
-         end,
-         []};
-      Ns -> {opaque_guard, [Ns]}
+  MFA = {cerl:atom_val(cerl:call_module(Guard)), F, length(Args)},
+  Kind =
+    case Eval of
+      neg -> neg_guard_fail;
+      pos -> guard_fail;
+      dont_know -> guard_fail
     end,
   FArgs =
     case is_infix_op(MFA) of
@@ -2486,17 +2294,12 @@ signal_guard_failure(Eval, Guard, ArgTypes, Tag, State) ->
 	[Arg1, Arg2] = Args,
 	[format_args_1([Arg1], [ArgType1], State),
          atom_to_list(F),
-         format_args_1([Arg2], [ArgType2], State)] ++ XInfo;
+         format_args_1([Arg2], [ArgType2], State)];
       false ->
         [F, format_args(Args, ArgTypes, State)]
     end,
   Msg = {Kind, FArgs},
-  LocTree =
-    case XInfo of
-      [] -> Guard;
-      [Ns1] -> select_arg(Ns1, Args, Guard)
-    end,
-  throw({Tag, {LocTree, Msg}}).
+  throw({Tag, {Guard, Msg}}).
 
 is_infix_op({erlang, F, 2}) ->
   erl_internal:comp_op(F, 2);
@@ -2588,15 +2391,14 @@ bind_guard_case_clauses(GenArgType, GenMap, ArgExpr, [Clause|Left],
 	  end,
 	  {NewMap3, CType} = bind_guard(cerl:clause_body(Clause), NewMap2,
 					Env, Eval, State),
-          Opaques = State#state.opaques,
 	  case Eval of
 	    pos ->
-	      case t_is_any_atom(true, CType, Opaques) of
+	      case t_is_any_atom(true, CType) of
 		true -> ok;
 		false -> throw({fail, none})
 	      end;
 	    neg ->
-	      case t_is_any_atom(false, CType, Opaques) of
+	      case t_is_any_atom(false, CType) of
 		true -> ok;
 		false -> throw({fail, none})
 	      end;
@@ -2845,15 +2647,11 @@ get_label(L) when is_integer(L) ->
 get_label(T) ->
   cerl_trees:get_label(T).
 
-t_is_simple(ArgType, State) ->
-  Opaques = State#state.opaques,
-  t_is_atom(ArgType, Opaques) orelse t_is_number(ArgType, Opaques)
-    orelse t_is_port(ArgType, Opaques)
-    orelse t_is_pid(ArgType, Opaques) orelse t_is_reference(ArgType, Opaques)
-    orelse t_is_nil(ArgType, Opaques).
-
-remove_local_opaque_types(Type, Opaques) ->
-  t_unopaque(Type, Opaques).
+t_is_simple(ArgType, _State) ->
+  t_is_atom(ArgType) orelse t_is_number(ArgType)
+    orelse t_is_port(ArgType)
+    orelse t_is_pid(ArgType) orelse t_is_reference(ArgType)
+    orelse t_is_nil(ArgType).
 
 %% t_is_structured(ArgType) ->
 %%   case t_is_nil(ArgType) of
@@ -2882,11 +2680,10 @@ is_send(send) -> true;
 is_send(_) -> false.
 
 is_lc_simple_list(Tree, TreeType, State) ->
-  Opaques = State#state.opaques,
   Ann = cerl:get_ann(Tree),
   lists:member(list_comprehension, Ann)
     andalso t_is_list(TreeType)
-    andalso t_is_simple(t_list_elements(TreeType, Opaques), State).
+    andalso t_is_simple(t_list_elements(TreeType), State).
 
 %%% ===========================================================================
 %%%
@@ -2895,7 +2692,6 @@ is_lc_simple_list(Tree, TreeType, State) ->
 %%% ===========================================================================
 
 state__new(Callgraph, Codeserver, Tree, Plt, Module, Records) ->
-  Opaques = erl_types:t_opaque_from_records(Records),
   {TreeMap, FunHomes} = build_tree_map(Tree, Callgraph),
   Funs = dict:fetch_keys(TreeMap),
   FunTab = init_fun_tab(Funs, dict:new(), TreeMap, Callgraph, Plt),
@@ -2909,7 +2705,7 @@ state__new(Callgraph, Codeserver, Tree, Plt, Module, Records) ->
   Env = lists:foldl(fun(Fun, Env) -> dict:store(Fun, map__new(), Env) end,
 		    dict:new(), Funs),
   #state{callgraph = Callgraph, codeserver = Codeserver,
-         envs = Env, fun_tab = FunTab, fun_homes = FunHomes, opaques = Opaques,
+         envs = Env, fun_tab = FunTab, fun_homes = FunHomes,
 	 plt = Plt, records = Records,
 	 warning_mode = false, warnings = [], work = Work, tree_map = TreeMap,
 	 module = Module, reachable_funs = sets:new([{version, 2}])}.
@@ -3416,8 +3212,8 @@ format_field_diffs(RecConstruction, #state{records = R}) ->
 
 -spec format_sig_args(type(), state()) -> string().
 
-format_sig_args(Type, #state{opaques = Opaques} = State) ->
-  SigArgs = t_fun_args(Type, Opaques),
+format_sig_args(Type, State) ->
+  SigArgs = t_fun_args(Type),
   case SigArgs of
     [] -> "()";
     [SArg|SArgs] ->
@@ -3470,8 +3266,6 @@ map_pats(Pats) ->
 fold_literals(TreeList) ->
   [cerl:fold_literal(Tree) || Tree <- TreeList].
 
-format_atom(A) ->
-  format_cerl(cerl:c_atom(A)).
 
 type(Tree) ->
   Folded = cerl:fold_literal(Tree),
