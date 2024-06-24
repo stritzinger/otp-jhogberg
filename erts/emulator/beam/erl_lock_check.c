@@ -110,6 +110,7 @@ static erts_lc_lock_order_t erts_lock_order[] = {
     {	"dist_table",				NULL			},
     {	"sys_tracers",				NULL			},
     {	"export_tab",				NULL			},
+    {	"struct_tab",				NULL			},
     {	"fun_tab",				NULL			},
     {	"environ",				NULL			},
     {	"release_literal_areas",		NULL			},
