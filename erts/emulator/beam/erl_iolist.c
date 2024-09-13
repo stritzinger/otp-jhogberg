@@ -171,34 +171,41 @@ enum iolist_action generic_iolist_size(ErtsIOListState *state,
                 }
 
                 size += 8;
-            } else if (is_bitstring(head)) {
-                ERTS_DECLARE_DUMMY(byte *base);
-                Uint head_offset, head_size;
-
-                ERTS_GET_BITSTRING(head, base, head_offset, head_size);
-
-                if ((head_size % (Unit)) != 0) {
-                    goto L_type_error;
+            } else {
+                if (is_atom(head)) {
+                    Atom *atom = atom_tab(atom_val(head));
+                    head = atom->u.bin;
                 }
 
-                if (IOL_SHOULD_COPY(VecThreshold,
-                                    Unit,
-                                    head_offset,
-                                    head_size)) {
-                    if (ERTS_UNLIKELY(size > (ERTS_UINT_MAX - head_size))) {
-                        goto L_overflow;
+                if (is_bitstring(head)) {
+                    ERTS_DECLARE_DUMMY(byte *base);
+                    Uint head_offset, head_size;
+
+                    ERTS_GET_BITSTRING(head, base, head_offset, head_size);
+
+                    if ((head_size % (Unit)) != 0) {
+                        goto L_type_error;
                     }
 
-                    size += head_size;
+                    if (IOL_SHOULD_COPY(VecThreshold,
+                                        Unit,
+                                        head_offset,
+                                        head_size)) {
+                        if (ERTS_UNLIKELY(size > (ERTS_UINT_MAX - head_size))) {
+                            goto L_overflow;
+                        }
+
+                        size += head_size;
+                    }
+                } else if (is_list(head)) {
+                    /* Deal with the inner list in `head` first, handling our
+                     * tail later */
+                    ESTACK_PUSH(s, tail);
+                    obj = head;
+                    continue;
+                } else if (is_not_nil(head)) {
+                    goto L_type_error;
                 }
-            } else if (is_list(head)) {
-                /* Deal with the inner list in `head` first, handling our tail
-                 * later */
-                ESTACK_PUSH(s, tail);
-                obj = head;
-                continue;
-            } else if (is_not_nil(head)) {
-                goto L_type_error;
             }
 
             obj = tail;
@@ -501,48 +508,56 @@ int generic_iolist_copy(ErtsIOListCopyState *copy_state,
                 }
 
                 copy_state->to_offset += 8;
-            } else if (is_bitstring(obj)) {
-                Uint offset, size;
-                byte *base;
-
-                ERTS_GET_BITSTRING(obj, base, offset, size);
-
-                if (ErrorSupport) {
-                    if ((size % (Unit)) != 0) {
-                        goto L_type_error;
-                    }
+            } else {
+                if (is_atom(obj)) {
+                    Atom *atom = atom_tab(atom_val(obj));
+                    obj = atom->u.bin;
                 }
 
-                if (IOL_SHOULD_COPY(VecThreshold,
-                                    Unit,
-                                    offset,
-                                    size)) {
+                if (is_bitstring(obj)) {
+                    Uint offset, size;
+                    byte *base;
+
+                    ERTS_GET_BITSTRING(obj, base, offset, size);
+
                     if (ErrorSupport) {
-                        if ((list_state->size - copy_state->to_offset) < size) {
-                            goto L_overflow_error;
+                        if ((size % (Unit)) != 0) {
+                            goto L_type_error;
                         }
                     }
 
-                    if (generic_iolist_copy_bitstring(copy_state,
-                                                      base,
-                                                      offset,
-                                                      size,
-                                                      &yield_count,
-                                                      YieldSupport)) {
-                        list_state->obj = obj;
-                        ESTACK_PUSH(s, CDR(cell));
-                        goto L_yield;
+                    if (IOL_SHOULD_COPY(VecThreshold,
+                                        Unit,
+                                        offset,
+                                        size)) {
+                        if (ErrorSupport) {
+                            if ((list_state->size -
+                                 copy_state->to_offset) < size) {
+                                goto L_overflow_error;
+                            }
+                        }
+
+                        if (generic_iolist_copy_bitstring(copy_state,
+                                                        base,
+                                                        offset,
+                                                        size,
+                                                        &yield_count,
+                                                        YieldSupport)) {
+                            list_state->obj = obj;
+                            ESTACK_PUSH(s, CDR(cell));
+                            goto L_yield;
+                        }
+                    } else {
+                        generic_iolist_copy_vec_enqueue(copy_state, obj);
                     }
-                } else {
-                    generic_iolist_copy_vec_enqueue(copy_state, obj);
+                } else if (is_list(obj)) {
+                    /* Deal with the inner list in `obj` first, handling our
+                     * tail later */
+                    ESTACK_PUSH(s, CDR(cell));
+                    continue;
+                } else if ((ErrorSupport) && is_not_nil(obj)) {
+                    goto L_type_error;
                 }
-            } else if (is_list(obj)) {
-                /* Deal with the inner list in `obj` first, handling our tail
-                 * later */
-                ESTACK_PUSH(s, CDR(cell));
-                continue;
-            } else if ((ErrorSupport) && is_not_nil(obj)) {
-                goto L_type_error;
             }
 
             obj = CDR(cell);
