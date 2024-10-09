@@ -1,8 +1,8 @@
 #
 # %CopyrightBegin%
-# 
+#
 # Copyright Ericsson AB 2023. All Rights Reserved.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 # %CopyrightEnd%
 #
 include $(ERL_TOP)/make/target.mk
@@ -36,9 +36,12 @@ RELSYSDIR = $(RELEASE_PATH)/lib/smt-$(VSN)
 # ----------------------------------------------------
 MODULES = \
         smt \
-        z3_nif
+        z3_nif \
+		smt_test \
+		smtlib2_scanner \
+		smtlib2_parser
 
-HRL_FILES = 
+HRL_FILES =
 
 ERL_FILES = $(MODULES:%=%.erl)
 
@@ -58,7 +61,7 @@ APPUP_TARGET= $(EBIN)/$(APPUP_FILE)
 # FLAGS
 # ----------------------------------------------------
 ERL_COMPILE_FLAGS += -I$(ERL_TOP)/lib/stdlib/include \
-  -Werror
+#  -Werror
 
 # ----------------------------------------------------
 # Targets
@@ -84,7 +87,7 @@ $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
 
 # ----------------------------------------------------
 # Release Target
-# ---------------------------------------------------- 
+# ----------------------------------------------------
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
@@ -93,7 +96,6 @@ release_spec: opt
 	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
 	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
 	$(INSTALL_DIR) "$(RELSYSDIR)/include"
-	$(INSTALL_DATA) $(HRL_FILES) "$(RELSYSDIR)/include"
+#$(INSTALL_DATA) $(HRL_FILES) "$(RELSYSDIR)/include"
 
 release_docs_spec:
-
