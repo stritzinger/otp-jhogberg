@@ -38,11 +38,11 @@ parse(Filename) ->
                     io:format("Parser Result ~p \n", [Res]),
                     smt(Res);
                 Else ->
-                    io:format("Message Parser failed: ~p\n On tokens : ~p\n", [Else, Tokens])
+                    io:format("Parser failed: ~p\n On tokens : ~p\n", [Else, Tokens])
             end,
             ok;
         ErrorInfo ->
-            io:format("Message Scanner failed: ~p\n On File ~p\n", [ErrorInfo, Filename])
+            io:format("Scanner failed: ~p\n On File ~p\n", [ErrorInfo, Filename])
     end.
 
 smt(Expressions) ->
