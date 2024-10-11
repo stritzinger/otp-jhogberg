@@ -1,21 +1,34 @@
-Nonterminals modulo expression expressions.
+Nonterminals modulo expression expressions types binary_op.
 
-Terminals '(' ')' type set_logic declare_const assert check_sat op varname value exit.
+Terminals '(' ')' function type varname bool int 'declare-const' 'declare-fun' assert 'check-sat' 'get-model' '<' '>' '='.
 
 Rootsymbol modulo.
 
-expression -> value : '$1'.
-expression -> varname : '$1'.
-expression -> '(' op expression expression ')' : {op, '$3', '$4'}.
-expression -> '(' set_logic type ')' : {set_logic, '$3'}.
-expression -> '(' declare_const varname type ')' : {declare_const, '$3', '$4'}.
+binary_op -> '<' : numeric_lt.
+binary_op -> '>' : numeric_gt.
+binary_op -> '=' : same.
+expression -> varname : value('$1').
+expression -> bool : {'Bool' , value('$1')}. % hardcoded always integer
+expression -> int : {'Int' , list_to_integer(value('$1'))}. % hardcoded always integer
+types -> type : [value('$1')].
+types -> type types : [value('$1')|'$2'].
+expression -> 'check-sat' : 'check-sat'.
+expression -> assert : assert.
+expression -> 'get-model' : 'get-model'.
+expression -> '(' expression ')' : {'$2'}.
 expression -> '(' assert expression ')' : {assert, '$3'}.
-expression -> '(' check_sat ')' : {check_sat}.
-expression -> '(' exit ')' : {exit}.
-expressions -> expression expressions : ['$1'] ++ '$2'.
+expression -> '(' 'declare-const' varname type ')' : {constant, value('$3'), value('$4')}.
+expression -> '(' 'declare-fun' varname '(' types ')' type ')' : {uninterpreted_function, value('$3'), '$5', value('$7')}.
+expression -> '(' binary_op expression expression ')' : {'$2' , '$3', '$4'}.
+expression -> '(' varname expressions ')' : {value('$2') , '$3' }.
+
+expressions -> expression  : ['$1'].
+expressions -> expression expressions : ['$1' | '$2'].
 
 
-modulo -> expressions.
+modulo -> expressions : '$1'.
 
 
 Erlang code.
+
+value({_, V}) -> V.
